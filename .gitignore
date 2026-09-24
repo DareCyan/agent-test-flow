@@ -20,3 +20,14 @@ examples/agent/*
 # Python
 __pycache__/
 *.pyc
+
+# opencode 离线安装包：大体积下载产物与构建中间目录不进仓库
+tools/opencode-bundle/cache/
+tools/opencode-bundle/stage/
+tools/opencode-bundle/dist/
+tools/opencode-bundle/.askpass.cmd
+tools/opencode-bundle/askpass.cmd
+# 凭据与环境相关的本机文件：绝不进仓库
+tools/opencode-bundle/askpass.secret
+tools/opencode-bundle/ssh_config.local
+tools/opencode-bundle/.oc-*

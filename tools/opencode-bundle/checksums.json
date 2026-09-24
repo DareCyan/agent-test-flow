@@ -1,0 +1,19 @@
+{
+  "version": "v1.18.32",
+  "repo": "sst/opencode",
+  "published_at": "2026-09-21T22:51:20Z",
+  "artifacts": [
+    {
+      "name": "opencode-linux-x64.tar.gz",
+      "size": 60608353,
+      "sha256": "3046e0404fdc60fb80307e7a47824ba07477364178a4d09baa8548496dd6d43b",
+      "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-linux-x64.tar.gz"
+    },
+    {
+      "name": "opencode-linux-x64-baseline.tar.gz",
+      "size": 60608354,
+      "sha256": "763af386ef88a8cab18df00fcf055690e5a55e31a7088beabe02307142a6adce",
+      "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-linux-x64-baseline.tar.gz"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+Host opencode-target
+    # Placeholder alias. Set the real host in one of these (both are gitignored):
+    #   ssh_config.local   (an env-specific copy of this file), or
+    #   the OC_HOST environment variable, e.g.
+    #       $env:OC_HOST = 'root@203.0.113.10'
+    HostName REPLACE_WITH_SERVER_IP
+    Port 22
+    User root
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+    PreferredAuthentications password
+    PubkeyAuthentication no
+    NumberOfPasswordPrompts 1
