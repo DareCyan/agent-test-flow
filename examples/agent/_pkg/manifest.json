@@ -1,0 +1,9 @@
+{
+  "name": "shopping-agent-v2",
+  "version": "2.0.3",
+  "entry": "agent.py",
+  "runtime": "ohos-agent-runtime/1.2",
+  "capabilities": ["单轮对话", "多轮对话"],
+  "missing_capabilities": ["图像识别"],
+  "note": "示例安装包（占位实现）。r1 上传演示用：后端只记录文件名与大小，不校验、不落盘、不解析内容。真实接入时请替换为被测智能体自己的安装包。"
+}

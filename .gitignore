@@ -16,6 +16,11 @@ examples/agent/*
 !examples/agent/agent-config.template.yaml
 !examples/agent/agent-config.template.json
 !examples/agent/install.template.json
+# 示例包源码、构建/校验脚本：体积小且无凭据，允许提交
+!examples/agent/_pkg/
+!examples/agent/_pkg/**
+!examples/agent/build_files.py
+!examples/agent/validate_files.py
 
 # Python
 __pycache__/

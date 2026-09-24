@@ -1,0 +1,4 @@
+# shopping-agent-v2 示例包依赖
+#
+# 示例实现故意不依赖任何第三方库（只用标准库），所以本文件为空。
+# 真实智能体应在这里写明依赖，install.json 的 deps 步骤会 `pip install -r` 它。

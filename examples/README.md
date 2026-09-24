@@ -4,31 +4,55 @@
 
 ---
 
+## r1「接入智能体」的三个槽位
+
+三个槽位各对应一个可用文件，都在 `examples/agent/` 下（**含凭据/机器信息的只留本地，不进仓库**）：
+
+| # | 槽位 | 文件 | 进仓库？ |
+|---|---|---|---|
+| 1 | 智能体安装包（.zip） | `agent/shopping-agent-v2.zip` | 否 |
+| 2 | 智能体配置文件 | `agent/shopping-agent.yaml` | 否（含真实 key） |
+| 3 | 安装说明文件（install.json） | `agent/shopping-agent-install.json` | 否（含机器地址/私钥路径） |
+
+三个文件是**配套**的：
+
+- 配置文件里的 `name`（`shopping-agent-v2`）与安装包的 `manifest.json` 一致；
+- install.json 的 `package.path` 指向**第 1 个 zip**，其 `verify` 步骤断言
+  `{workspace}/agent.py` 存在 —— 而该 zip 里确实有 `agent.py`，所以这条断言能通过；
+- install.json 的 `agent.version`（2.0.3）与包内 `manifest.json`、`agent.py --version` 一致。
+
+---
+
 ## 1. 智能体安装包（r1 左侧槽位 · 智能体二进制文件）
 
 | 文件 | 说明 |
 |---|---|
-| `agent/shopping-agent-v2.zip` | 示例安装包（1.8 KB，内含占位二进制 + manifest + README）· **本地文件，不进仓库** |
+| `agent/shopping-agent-v2.zip` | 示例安装包（3.5 KB：`agent.py` + `requirements.txt` + `manifest.json` + `README.txt` + `legacy_init.sh`）· **本地文件，不进仓库** |
+| `agent/_pkg/` | 上面 zip 的**源码目录**（解压后的样子）· **进仓库**（纯占位、无凭据） |
+| `agent/build_files.py` | 由 `_pkg/` 重新打包出 zip，并生成含真实 key 的 `shopping-agent.yaml` · **进仓库** |
+
+`agent.py` 是**能真跑**的占位实现（只用标准库）：`python agent.py --info` / `--health`。
 
 上传约定：
 
 - 槽位只接受 **`.zip`**（文件选择框的过滤条件；拖拽不做限制）；
 - 后端**不校验、不落盘、不解析**这个 zip —— 只把上传时的**文件名和大小**记进接入结果，
   用于页面展示（`profile.binary / binary_size`，且 `binary_stored: false`）；
-- 所以内容是什么都无所谓，换成真实安装包也不会改变行为。
+- 所以内容是什么都无所谓，换成真实安装包也不会改变行为；
+  但**要跑通 step3 的 install 流程**，包里就得有 install.json 断言的东西（见上）。
 
 ## 2. 智能体配置文件（r1 右侧槽位 · 智能体配置文件）
 
 | 文件 | 说明 |
 |---|---|
-| `agent/agent-config.template.yaml` | **模板**：三项必填 + 全部可选字段，逐行带注释 |
-| `agent/agent-config.template.json` | 同一模板的 JSON 版 |
-| `agent/shopping-agent.yaml` | 填好的示例（YAML，可直接上传）· **本地文件，不进仓库** |
-| `agent/shopping-agent.json` | 填好的示例（JSON）· **本地文件，不进仓库**（可能含真实 key） |
+| `agent/agent-config.template.yaml` | **模板**：三项必填 + 全部可选字段，逐行带注释 · 进仓库 |
+| `agent/agent-config.template.json` | 同一模板的 JSON 版 · 进仓库 |
+| `agent/shopping-agent.yaml` | **可用的真实配置**（含真实 key）· **本地文件，不进仓库** |
 
-> **提交约定**：`examples/agent/` 只提交上面两个 `agent-config.template.*`（`.gitignore` 里是
-> `examples/agent/*` + 两个模板的例外规则）。填好的示例配置里往往写着真实 `key`，
-> 所以只在本地留着；想跑真 LLM 就把 `api / key / model` 填进自己上传的配置，或写进
+> **提交约定**：`examples/agent/` 走 `.gitignore` 的 `examples/agent/*` 全排除 + 例外放行。
+> 放行的是模板、`_pkg/` 源码和两个脚本；**不放行**的是 zip、`shopping-agent.yaml`、
+> `shopping-agent-install.json` —— 它们含真实 key / 机器地址 / 私钥路径。
+> 想跑真 LLM，就把 `api / key / model` 填进自己上传的配置，或写进
 > `backend/config.yaml`（同样不进仓库）。
 
 必填三项 —— 就是智能体自己的模型接入信息，用于「**模型联通性识别**」实测：
@@ -73,7 +97,30 @@ missing_capabilities: [图像识别]      # 按 index 的 13 个能力列名
 
 L2 编号表见 `GET /api/scene-matrix` 的 `l2_info`（也可在页面 r4 悬停查看能力列）。
 
-## 3. 测试任务简述（r2 输入框）
+## 3. 安装说明文件（r1 第三个槽位 · install.json）
+
+| 文件 | 说明 |
+|---|---|
+| `agent/install.template.json` | **模板**：全部字段 + 逐条规则注释 · 进仓库 |
+| `agent/shopping-agent-install.json` | **可用的真实说明**（指向本机 + 真实私钥路径）· **本地文件，不进仓库** |
+
+这份文件决定 **step3「安装执行」** 怎么装机。要点：
+
+- **只支持密钥认证**：`target.auth.method` 只能是 `key`，且 `private_key` 必填
+  （`backend/install_doc.py` 的 `AUTH_METHODS = ("key",)` —— 口令认证在 Windows 上没有
+  稳的非交互做法，所以不提供）。想让本机之外的目标机器可用，界面里得先有可用的私钥；
+- **默认 dry-run**：`install.execute: false`，只有文件里显式写 `true` 才真执行；
+- **可执行命令只有 `install.steps[].run`**，AI 只解读 `desc/notes` 并规范化顺序，不生成命令；
+- 命令里可用占位符：`{zip} {zip_name} {zip_sha256} {workspace} {remote_dir} {host} {port} {user} {agent} {version}`，
+  写错名字（如 `{wrokspace}`）会在校验阶段直接报错，不会静默生效。
+
+`shopping-agent-install.json` 的 `verify` 步骤断言 `{workspace}/agent.py`，
+正好对应第 1 个槽位那个 zip 的内容 —— 三个文件是配套的。
+
+> 它当前的 `target` 是 `127.0.0.1:22`。本机 22 端口没有 sshd（服务 Stopped），
+> 所以真连接会失败 —— 这正好用来验证**失败路径的报错是否清楚**；dry-run 不受影响。
+
+## 4. 测试任务简述（r2 输入框）
 
 | 文件 | 说明 |
 |---|---|
@@ -87,7 +134,7 @@ L2 编号表见 `GET /api/scene-matrix` 的 `l2_info`（也可在页面 r4 悬�
 
 ---
 
-## 4. 附：后端 LLM 配置（不属于"示例测试文件"，但常一起用）
+## 5. 附：后端 LLM 配置（不属于"示例测试文件"，但常一起用）
 
 想让 step1 跑**真 LLM** 时用它，模板是 `backend/config.example.yaml`（或 `.json`）：
 
@@ -119,7 +166,14 @@ model: gpt-4o-mini
 
 
 1. `start.cmd` 启动，打开 http://127.0.0.1:8787/
-2. r1 左槽传一个 `.zip`，右槽传**按模板填好的**配置（本地那份 `agent/shopping-agent.yaml` / `.json` 就是例子），点「接入智能体」
-3. 看 6 行识别日志（第 5 行的联通性结论即来自你上传的配置）
-4. r2 粘贴 `briefs/01-电商购物.md` 的内容，点「提交测试任务」
-5. 观察 r3 树 / r4 矩阵 / r5 指标 / r6 参数明细随真实 step1 进度联动，顶部 step1 由「运行中」变「完成」
+2. r1 三个槽位分别上传：
+   - 左槽（安装包）`agent/shopping-agent-v2.zip`
+   - 右槽（配置文件）`agent/shopping-agent.yaml`
+   - 第三槽（安装说明）`agent/shopping-agent-install.json`
+
+   点「接入智能体」。
+3. 看 6 行识别日志（第 5 行的联通性结论即来自你上传的配置；用真实 key 的
+   `shopping-agent.yaml` 会显示「可达…」，用模板里的占位 key 则是「鉴权失败 401」）
+4. 进 step3「安装执行」：先看 dry-run 计划（4 步，`legacy` 标 SKIP），再按需开 `execute`
+5. r2 粘贴 `briefs/01-电商购物.md` 的内容，点「提交测试任务」
+6. 观察 r3 树 / r4 矩阵 / r5 指标 / r6 参数明细随真实 step1 进度联动，顶部 step1 由「运行中」变「完成」
