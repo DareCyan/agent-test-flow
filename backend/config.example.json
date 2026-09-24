@@ -1,0 +1,10 @@
+{
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "",
+    "timeout": 180,
+    "temperature": 0.7,
+    "fallback_to_mock": true
+  }
+}

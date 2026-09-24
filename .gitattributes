@@ -1,0 +1,9 @@
+# 换行：仓库内文本统一 LF，但 start.cmd 必须**原样保留 CRLF + 纯 ASCII**
+# （cmd.exe 解析 LF-only 的 .cmd 会吃掉行首单词，见 README「已知边界」）
+# 用 -text 关闭一切换行转换：clone / ZIP 下载 / 检出 拿到的都是原始 CRLF
+* text=auto eol=lf
+*.cmd -text
+*.bat -text
+*.png binary
+*.zip binary
+*.xlsx binary

@@ -1,0 +1,15 @@
+{
+  "_comment": "智能体配置文件模板（JSON 版）。用法同 agent-config.template.yaml：r1 的配置文件槽位直接上传本文件。",
+  "_required": "api / key / model 三项为必填，用于「模型联通性识别」实测。",
+
+  "api": "https://api.openai.com/v1",
+  "key": "sk-REPLACE-WITH-YOUR-KEY",
+  "model": "gpt-4o-mini",
+
+  "name": "shopping-agent-v2",
+  "protocol": "openai-compatible",
+  "call_modes": ["单轮对话", "多轮对话"],
+
+  "_optional_capabilities": "不写能力声明时，默认支持全部 29 个 L2 能力，仅「图像识别」列为不支持。",
+  "missing_capabilities": ["图像识别"]
+}

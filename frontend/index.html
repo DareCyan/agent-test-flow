@@ -1,0 +1,1555 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 自动化测试工作台</title>
+<!-- 传输层：后端可用则走真实 step1，不可用则整体回退到本页原有演示动画 -->
+<script src="js/api.js"></script>
+<script>
+/* ================================================================
+   DEMO 演示配置 —— 所有文案 / 数字集中在此，改这里即可换演示内容
+   ================================================================ */
+const DEMO = {
+  /* ---------- 面板标题 ---------- */
+  titles: { r1:'智能体接入', r2:'测试任务输入', r3:'任务空间树', r4:'评测能力矩阵', r5:'测试质量', r6:'参数覆盖明细' },
+
+  /* ---------- 全局时序（秒 / 随机化） ---------- */
+  timing: {
+    genStartDelaySec: 1.2,   /* 区域3：树开始有进度后 X 秒，右侧信息流才开始渲染 */
+    evaluateDelaySec: 1.5,   /* 区域5/6：「评估中」提示 Y 秒后才显示数据 */
+    jitterRatio: 0.35,       /* 亮灯节奏随机化幅度：0=严格固定，0.35=±35% 抖动 */
+    shuffleCells: true,      /* 区域4：行内格子点亮顺序随机（不再从左到右） */
+  },
+
+  /* ---------- 区域 1 · 智能体接入（真实上传 + 未选择时的演示回退文件） ---------- */
+  agent: {
+    waiting: 'Waiting for agent…',
+    ready: 'Agent Ready',
+    logs: ['智能体接入中…','单轮对话调用方式识别中…','多轮对话调用方式识别中…','配置文件识别中…','模型联通性识别中…','模型协议识别中…'],
+  },
+  /* 二进制槽位：传 .zip 安装包；后端不校验、不落盘、不解析，只记文件名/大小。
+     配置槽位：真读文本并解析（api / key / model），模板见 examples/agent/。 */
+  upload: {
+    slots: [
+      { id:'bin', label:'智能体二进制文件', hint:'.zip · 点击或拖拽', accept:'.zip',
+        fallback:{ name:'shopping-agent-v2.zip', size:'2.4 MB' } },
+      { id:'cfg', label:'智能体配置文件', hint:'.yaml / .json · 含 api / key / model', accept:'.yaml,.yml,.json',
+        fallback:{ name:'shopping-agent.yaml', size:'1.8 KB' } },
+    ],
+  },
+
+  /* ---------- 区域 2 · 测试任务输入 ---------- */
+  task: {
+    placeholder: '测试该智能体完成电商购物任务的能力，覆盖商品属性、筛选条件、订单配置、售后属性等维度。',
+    text: '测试该智能体完成电商购物任务的能力，覆盖商品属性、筛选条件、订单配置、售后属性等维度。',
+    hint: '提交后自动构建任务空间，并沿维度路径执行智能体能力覆盖测试',
+  },
+
+  /* ---------- 区域 3 · 任务空间树（场景 → 维度类别 → 维度 → 属性） ---------- */
+  tree: {
+    scene: '电商购物',
+    category: '维度类别',
+    dims: [
+      { name:'商品属性', leaves:['商品品类','商品品牌'],   cases:18, valid:18, deep:['文字识别','页面元素识别','结果判定'] },
+      { name:'筛选条件', leaves:['价格区间','发货地','促销状态'], cases:17, valid:15, deep:['输入操作','点击操作','约束检查'] },
+      { name:'订单配置', leaves:['支付方式','配送方式'],   cases:17, valid:17, deep:['任务规划','输入操作','状态判定'] },
+      { name:'售后属性', leaves:['退换政策','保修期限'],   cases:17, valid:16, deep:['工具调用','结果判定','行动规划'] },
+      { name:'平台属性', leaves:['平台类型','店铺类型'],   cases:17, valid:16, deep:['页面跳转','页面元素识别','路径规划'] },
+      { name:'个人偏好', leaves:['品牌偏好','价格偏好'],   cases:17, valid:15, deep:['任务规划','输入操作','约束检查'] },
+      { name:'商品定制', leaves:['定制尺寸','定制颜色'],   cases:17, valid:17, deep:['点击操作','工具调用','结果判定'] },
+    ],
+  },
+
+  /* ---------- 区域 4 · 能力矩阵列 ---------- */
+  caps: [
+    ['识别', ['图像识别','文字识别','页面元素识别']],
+    ['规划', ['任务规划','行动规划','路径规划']],
+    ['行动', ['点击操作','输入操作','页面跳转','工具调用']],
+    ['判定', ['状态判定','结果判定','约束检查']],
+  ],
+  missCap: '图像识别',          /* 每行不点亮的列：被测智能体无视觉能力 */
+
+  /* ---------- 区域 3 · 泛化数据集 Console ---------- */
+  queries: {
+    /* 标题拆两行（标签 + 数量），窄卡片才放得下 */
+    header: '已泛化query',
+    total: 100,
+    pool: ['请在淘宝买','请在京东买','请在拼多多买','帮我找一件羽绒服','买双跑步鞋','50 元以内的蓝牙耳机','300 元以内的机械键盘','买两箱牛奶','找一款适合老人用的手机','买一个 24 寸行李箱','比价 AirPods 和漫步者','下单前看看店铺评分','帮我看看这块手表是不是正品','给学生党推荐一款平板','买猫粮哪个牌子好','买台空气炸锅','双11 买冰箱划算吗','帮我订一箱矿泉水','找条修身牛仔裤','买个体重秤'],
+  },
+
+  /* ---------- 幽灵文字（弱化执行反馈） ---------- */
+  ghostWords: ['App 名称识别…','价格区间提取…','商品关键词解析…','地址填充…','搜索条件构造…','价格信息读取…','页面元素定位…','结果一致性检查…','促销标签解析…','店铺类型判定…'],
+
+  /* ---------- 区域 5 · 测试质量（延迟结算的 6 项指标） ----------
+     type: int 整数 / pct 百分比 / dec 三位小数 / frac [已用,范围]  */
+  r5: {
+    evaluating: '评估中…',
+    evaluatingSub: '正在汇总测试覆盖统计',
+    items: [
+      { label:'任务生成数量', value: 10,          type:'int' },
+      { label:'变体',        value: 20,          type:'int' },
+      { label:'去重维度',    value: 9,           type:'int' },
+      { label:'矩阵覆盖',    value:[59,182],     type:'frac', hl:true },
+      { label:'检查通过率',  value: 70,          type:'pct' },
+      { label:'覆盖度评分',  value: 0.531,       type:'dec',  hl:true },
+    ],
+  },
+
+  /* ---------- 区域 6 · 参数覆盖明细（done 后出现；59/182 与区域5矩阵覆盖自洽） ---------- */
+  r6: {
+    placeholder: ['参数取值覆盖明细', '测试完成后按参数维度生成'],
+    columns: ['参数','关联维度','取值分布','已用/范围','覆盖率'],
+    rows: [
+      { param:'platform',         dim:'平台属性', values:'淘宝 · 京东 · 拼多多 · 抖音 · 小红书', used:12, range:30 },
+      { param:'product_category', dim:'商品属性', values:'数码 · 服饰 · 食品 · 家居 等 8 类',    used:14, range:36 },
+      { param:'brand',            dim:'个人偏好', values:'华为 · 苹果 · 小米 · 优衣库 等',       used:9,  range:30 },
+      { param:'specification',    dim:'商品定制', values:'尺寸 · 颜色 · 容量 · 材质',            used:8,  range:24 },
+      { param:'price_upper',      dim:'筛选条件', values:'50 · 100 · 300 · 500 · 1000 …',        used:10, range:28 },
+      { param:'sort_by',          dim:'订单配置', values:'销量 · 价格 · 好评 · 新品',            used:6,  range:34 },
+    ],
+  },
+};
+</script>
+<style>
+:root{
+  --bg:#FAFAFA; --panel:#FFFFFF;
+  --line:#E5E7EB; --line2:#EEF0F3; --line3:#F0F1F4;
+  --ink:#1F2328; --ink2:#4B5563; --ink3:#6B7280; --ink4:#9CA3AF; --ink5:#C3C9D2;
+  --cyan:#4BACC6; --cyan-deep:#2E8BA6; --cyan-bg:#EAF6F9; --cyan-mid:#A6D4DF;
+  --green:#3FA98E;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --row-h:17px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink);
+  font:13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums;
+}
+.page{height:100vh;min-width:1180px;display:flex;flex-direction:column;padding:14px 16px;gap:12px}
+
+/* ---------- 区域 7：顶部预留 ---------- */
+.r7{height:44px;flex:none;border-bottom:1px solid var(--line)}
+
+/* ---------- 主网格 ---------- */
+.grid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.04fr) minmax(0,1fr);grid-template-rows:1.18fr 1fr;gap:12px}
+#r1{grid-area:1/1}#r3{grid-area:1/2}#r2{grid-area:2/1}#r4{grid-area:2/2}
+.rcol{grid-area:1/3/3/4;display:flex;flex-direction:column;gap:12px;min-height:0}
+#r5{flex:none}
+#r6{flex:1;min-height:0}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;min-height:0;min-width:0}
+.p-head{display:flex;align-items:center;justify-content:space-between;flex:none;margin-bottom:10px}
+.p-title{font-size:11px;letter-spacing:.05em;color:var(--ink4)}
+.p-title b{font-weight:600;color:var(--ink3);margin-left:6px;letter-spacing:.02em}
+/* 数据来源标记：mock 时提醒"算法是真的、输入是规则生成的，不能当结论" */
+.p-src{display:inline-block;margin-left:6px;padding:0 4px;border:1px solid #EFE0BF;border-radius:3px;font:9.5px var(--mono);color:#A8811B;background:#FFFCF3;vertical-align:1px;letter-spacing:0}
+.p-src.st-llm{color:var(--cyan-deep);background:var(--cyan-bg);border-color:#BEE3EC}
+.p-src:empty{display:none}
+.p-status{font-size:11px;display:flex;align-items:center;gap:5px}
+.p-status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85}
+.st-gray{color:var(--ink4)} .st-green{color:var(--green)} .st-cyan{color:var(--cyan-deep)} .st-dark{color:var(--ink2)}
+
+/* ---------- 阶段显隐 ---------- */
+.st{display:none !important}
+body[data-phase=idle] .st-idle,
+body[data-phase=connecting] .st-connecting,
+body[data-phase=ready] .st-ready,
+body[data-phase=modeling] .st-modeling,
+body[data-phase=executing] .st-executing,
+body[data-phase=evaluating] .st-evaluating,
+body[data-phase=done] .st-done,
+body[data-phase=executing] .st-eval-keep,
+body[data-phase=evaluating] .st-eval-keep,
+body[data-phase=done] .st-eval-keep{display:var(--d,block) !important}
+
+/* ---------- 区域 1 ---------- */
+.uploads{display:flex;gap:10px;flex:none}
+.upload{flex:1;height:54px;border:1px dashed #D9DCE1;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer;transition:border-color .2s, background .2s}
+.upload:hover{border-color:var(--cyan-mid)}
+.upload.drag{border-color:var(--cyan);background:#F6FBFD}
+.finput{display:none}
+.upload .ic{font-size:12px;color:var(--ink4);line-height:1}
+.upload .t{font-size:12px;color:var(--ink2)}
+.upload .s{font-size:10px;color:var(--ink5)}
+.btn{flex:none;height:30px;border-radius:4px;border:1px solid transparent;font-size:12.5px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;user-select:none;transition:opacity .2s}
+.btn-primary{background:var(--ink);color:#fff}
+.btn-primary:hover{opacity:.88}
+.btn-disabled{background:#F3F4F6;color:#A6ADB8;border-color:#EBEDF0;cursor:not-allowed}
+.btn-outline{background:#fff;color:var(--ink2);border-color:#D4D8DE}
+.btn-outline:hover{border-color:var(--cyan-mid);color:var(--cyan-deep)}
+.console{flex:1;min-height:0;margin-top:10px;border:1px solid var(--line2);border-radius:4px;background:#FCFCFD;padding:8px 10px;font:11.5px/1.8 var(--mono);color:var(--ink2);overflow:hidden}
+.console .ts{color:var(--ink5);margin-right:8px}
+.console .waiting{color:var(--ink4)}
+.console .caret{display:inline-block;width:6px;height:12px;background:var(--ink5);vertical-align:-1px;animation:blink 1.1s steps(1) infinite}
+.console .ok-line{color:var(--green)}
+.console .log-line{animation:logIn .25s}
+@keyframes logIn{from{opacity:0;transform:translateY(3px)}to{opacity:1}}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- 区域 2 ---------- */
+.field-label{font-size:11px;color:var(--ink4);display:flex;justify-content:space-between;flex:none;margin-bottom:6px}
+.field-label .h{color:var(--ink5)}
+textarea{width:100%;flex:1;min-height:0;resize:none;border:1px solid var(--line);border-radius:4px;padding:9px 11px;font:12.5px/1.65 inherit;color:var(--ink);background:#fff}
+textarea::placeholder{color:var(--ink5)}
+textarea:focus{outline:none;border-color:var(--cyan-mid)}
+.hint{font-size:10.5px;color:var(--ink5);margin:7px 0 8px}
+/* ---------- 区域 2：运行参数（场景 / 任务数 / 变体数，真实传给后端） ---------- */
+.run-params{flex:none;display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.run-params .rp{display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--ink4);white-space:nowrap}
+.run-params .rp-ctl{height:22px;border:1px solid var(--line);border-radius:3px;background:#fff;font:11px inherit;color:var(--ink2);padding:0 6px;min-width:0}
+.run-params select.rp-ctl{flex:1;max-width:132px;cursor:pointer}
+.run-params .rp-num{width:42px;text-align:center}
+.run-params .rp-ctl:focus{outline:none;border-color:var(--cyan-mid)}
+.run-params .rp-ctl:disabled{background:#F7F8FA;color:var(--ink4);cursor:not-allowed}
+.run-params .rp-meta{margin-left:auto;font:10px var(--mono);color:var(--ink5);white-space:nowrap}
+
+/* ---------- 区域 3：目录树 ---------- */
+.r3-body{flex:1;min-height:0;position:relative;display:flex}
+.r3-main{flex:1;min-width:0;display:flex;flex-direction:column}
+/* 生成台：默认吃满右侧剩余宽度 —— 只给树留最小宽度（160px）+ 分隔条（11px），
+   即 CSS 常量 171 = GEN_TREE_MIN + GEN_SPLIT_W（两边必须一致，E2E 有防漂移断言）。
+   手动拖拽后由 JS 写内联 px 宽度并记忆在 localStorage；双击分隔条回到这个默认。 */
+.gen-console{flex:none;width:min(calc(100% - 171px),900px);min-width:0;border:1px solid var(--line2);border-radius:4px;background:#FCFCFD;padding:7px 9px;font:10.5px/1.75 var(--mono);color:var(--ink3);display:flex;flex-direction:column;overflow:hidden}
+.gen-console .gh{color:var(--cyan-deep);flex:none;margin-bottom:4px;line-height:1.35}
+.gen-console .gh .n{display:block;color:var(--ink2);font-size:11px;font-weight:600}
+.gen-console .scroller{flex:1;min-height:0;overflow:hidden}
+.gen-console .q{color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gen-console .q em{font-style:normal;color:var(--ink5);margin-right:5px}
+/* 生成台宽度分隔条：拖拽改宽（双击回到默认＝吃满右侧）；可见阶段与生成台同步 */
+.r3-split{flex:none;width:11px;cursor:col-resize;display:flex;align-items:center;justify-content:center}
+.r3-split i{width:2px;height:92%;border-radius:1px;background:var(--line2);transition:background .15s}
+.r3-split:hover i,.r3-split.drag i{background:var(--cyan)}
+.center-msg{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--ink4);font-size:13px}
+.center-msg .sub{font-size:11px;color:var(--ink5)}
+.dots{display:flex;gap:5px}
+.dots i{width:5px;height:5px;border-radius:50%;background:var(--cyan);opacity:.35;animation:dot 1.2s infinite}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes dot{0%,100%{opacity:.25;transform:translateY(0)}45%{opacity:1;transform:translateY(-3px)}}
+.tree-wrap{flex:1;min-height:0;display:flex;flex-direction:column}
+.tree{flex:1;min-height:0;overflow:hidden;position:relative;font-size:12px}
+.trow{position:relative;height:var(--row-h);display:flex;align-items:center;color:var(--ink3);white-space:nowrap;transition:color .3s, background .3s}
+.trow .label{margin-left:2px}
+.trow .ptag{font:9.5px var(--mono);color:var(--ink5);margin-left:7px;transition:color .3s}
+.trow .vline,.trow .tee{position:absolute;border-color:#E4E6EA;transition:border-color .25s}
+.trow .vline{top:0;bottom:0;width:0;border-left:1px solid #E4E6EA}
+.trow .vline.half{bottom:50%}
+.trow .tee{top:50%;width:10px;border-top:1px solid #E4E6EA}
+.vline.run,.tee.run{border-color:var(--cyan)}
+.vline.done,.tee.done{border-color:var(--cyan-mid)}
+.trow.run{color:var(--cyan-deep);font-weight:500}
+.trow.run .ptag{color:var(--cyan-deep)}
+.trow.done{color:#71AFC3}
+.trow.done .ptag{color:var(--cyan)}
+.trow.anchor.run{background:#F2FAFC}
+.trow.anchor.run::after{content:"";position:absolute;left:0;top:2px;bottom:2px;width:2px;background:var(--cyan)}
+.legend{flex:none;display:flex;gap:14px;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line3);font-size:10.5px;color:var(--ink4)}
+.legend .li{display:flex;align-items:center;gap:5px}
+.sw{width:9px;height:9px;border-radius:2px}
+.sw0{background:#F3F4F6;border:1px solid #E3E5EA}
+.sw1{background:var(--cyan-bg);border:1px solid #8FCBD9}
+.sw2{background:var(--cyan)}
+
+/* ---------- 区域 4：能力矩阵 ---------- */
+.r4-body{flex:1;min-height:0;position:relative;display:flex;flex-direction:column}
+.matrix{flex:1;min-height:0;border:1px solid #E9EBEF;border-radius:4px;overflow:hidden;display:grid;
+  grid-template-columns:96px repeat(13,minmax(0,1fr));
+  grid-template-rows:22px 78px repeat(7,minmax(0,1fr));background:#fff}
+.mx{border-right:1px solid var(--line3);border-bottom:1px solid var(--line3);min-width:0;min-height:0}
+.mx-corner{grid-column:1;grid-row:1/3;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--ink4);background:#FBFBFC}
+.mx-group{grid-row:1;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--ink3);background:#FBFBFC;border-bottom:1px solid var(--line2)}
+.mx-cap{grid-row:2;display:flex;align-items:center;justify-content:center}
+.mx-cap span{writing-mode:vertical-rl;font-size:10px;color:var(--ink3);letter-spacing:.04em}
+.gsep{border-left:1px solid var(--line)}
+.mx-l2{display:flex;align-items:center;padding:0 8px;font-size:11.5px;color:var(--ink2)}
+.mx-l2 .p{font:9.5px var(--mono);color:var(--ink4);margin-right:6px}
+.mx-cell{position:relative;cursor:default}
+.fill{position:absolute;inset:3px;border-radius:2px;background:#F5F6F8;transition:background .25s, box-shadow .25s}
+.t1 .fill{background:rgba(75,172,198,.30)}
+.t2 .fill{background:rgba(75,172,198,.60)}
+.t3 .fill{background:var(--cyan)}
+.now .fill{box-shadow:inset 0 0 0 1.5px var(--cyan)}
+.ra{background:#F7FCFD}
+#tip{position:absolute;z-index:5;background:#fff;border:1px solid var(--line);border-radius:4px;padding:5px 8px;font-size:11px;color:var(--ink2);pointer-events:none;display:none;white-space:nowrap}
+
+/* ---------- 区域 5：紧凑指标网格 ---------- */
+.r5-grid{flex:none;display:grid;grid-template-columns:repeat(3,1fr);gap:12px 10px;padding:2px 0}
+.r5-grid .cell .l{font-size:10.5px;color:var(--ink4);margin-bottom:2px;white-space:nowrap}
+.r5-grid .cell .v{font-size:17px;font-weight:600;line-height:1.3;letter-spacing:-.01em;color:var(--ink2);font-variant-numeric:tabular-nums}
+.r5-grid .cell .v.hl{color:var(--cyan-deep)}
+.r5-grid .cell .v.dim{color:var(--ink5);font-weight:500;font-size:15px}
+
+/* ---------- 区域 6：参数覆盖明细表 ---------- */
+.r6-wrap{flex:1;min-width:0;min-height:0;overflow:auto;border:1px solid var(--line2);border-radius:4px}
+.r6-table{width:max-content;min-width:100%;border-collapse:collapse;font-size:11px}
+.r6-table th{position:sticky;top:0;background:#FBFBFC;color:var(--ink4);font-weight:500;text-align:left;padding:6px 8px;border-bottom:1px solid var(--line2);font-size:10.5px;white-space:nowrap}
+.r6-table td{padding:6px 8px;border-bottom:1px solid var(--line3);color:var(--ink2);vertical-align:middle}
+.r6-table tr:last-child td{border-bottom:none}
+.r6-table .pm{font:10.5px var(--mono);color:var(--ink2);white-space:nowrap}
+.r6-table td:nth-child(2){white-space:nowrap}
+.r6-table .vd{color:var(--ink3);max-width:112px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r6-table .fr{font:10.5px var(--mono);color:var(--ink4);white-space:nowrap}
+.r6-table .cv{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.r6-table .cv .b{width:38px;height:4px;border-radius:2px;background:#EEF0F3;overflow:hidden;flex:none}
+.r6-table .cv .b i{display:block;height:100%;background:var(--cyan)}
+.r6-table .cv b{font:10px var(--mono);color:var(--cyan-deep);font-weight:500}
+
+/* ---------- 幽灵文字 ---------- */
+.ghost{position:absolute;font-size:11px;color:var(--ink3);filter:blur(.4px);pointer-events:none;white-space:nowrap;animation:ghostLife var(--life,1.2s) ease-in-out forwards}
+@keyframes ghostLife{0%{opacity:0}25%{opacity:.45}75%{opacity:.4}100%{opacity:0}}
+</style>
+<!-- 顶部总流程步骤条（取自原 pipeline.html 的 .mp-step-*，按 index 紧凑栅格重新定标） -->
+<link rel="stylesheet" href="css/pipeline-bar.css">
+</head>
+<body data-phase="idle">
+<div class="page">
+  <header class="r7">
+    <!-- 顶部总流程步骤条：index 整体即 step1；2/3/4 本次为占位（仅显示待命） -->
+    <div class="mp-step-bar">
+      <nav class="mp-steps" id="mp-steps">
+        <div class="mp-step is-current" data-step="1">
+          <div class="mp-step-icon"><span class="mp-step-num">1</span></div>
+          <div class="mp-step-text">
+            <span class="mp-step-name">数据集生成</span>
+            <span class="mp-step-status" id="mp-step1-status">待命</span>
+          </div>
+        </div>
+        <div class="mp-step-connector"></div>
+        <div class="mp-step" data-step="2">
+          <div class="mp-step-icon"><span class="mp-step-num">2</span></div>
+          <div class="mp-step-text">
+            <span class="mp-step-name">代码生成APP</span>
+            <span class="mp-step-status" id="mp-step2-status">待命</span>
+          </div>
+        </div>
+        <div class="mp-step-connector"></div>
+        <div class="mp-step" data-step="3">
+          <div class="mp-step-icon"><span class="mp-step-num">3</span></div>
+          <div class="mp-step-text">
+            <span class="mp-step-name">安装执行</span>
+            <span class="mp-step-status" id="mp-step3-status">待命</span>
+          </div>
+        </div>
+        <div class="mp-step-connector"></div>
+        <div class="mp-step" data-step="4">
+          <div class="mp-step-icon"><span class="mp-step-num">4</span></div>
+          <div class="mp-step-text">
+            <span class="mp-step-name">判定</span>
+            <span class="mp-step-status" id="mp-step4-status">待命</span>
+          </div>
+        </div>
+      </nav>
+      <div class="mp-bar-meta demo" id="mp-bar-meta" title="正在探测后端"><span class="dot"></span><span id="mp-bar-meta-text">检测中</span></div>
+    </div>
+  </header>
+  <main class="grid">
+
+    <!-- 区域 1：智能体接入 -->
+    <section class="panel" id="r1">
+      <div class="p-head">
+        <div class="p-title">01<b>智能体接入</b></div>
+        <div class="p-status st-gray" id="r1-status">等待接入</div>
+      </div>
+      <div class="uploads" id="uploads"></div>
+      <div style="height:10px;flex:none"></div>
+      <div class="btn btn-primary" id="btn-connect">接入智能体</div>
+      <div class="console"><div id="console-body"><span class="waiting">Waiting for agent… <span class="caret"></span></span></div></div>
+    </section>
+
+    <!-- 区域 3：任务空间树（目录树） -->
+    <section class="panel" id="r3">
+      <div class="p-head">
+        <div class="p-title">03<b>任务空间树</b><span class="p-src" id="r3-src"></span></div>
+        <div class="p-status st-gray" id="r3-status">空闲</div>
+      </div>
+      <div class="r3-body">
+        <div class="r3-main">
+        <div class="center-msg st st-idle st-ready" style="--d:flex">
+          <div>等待测试任务</div>
+          <div class="sub">提交测试任务后开始任务空间建模</div>
+        </div>
+        <div class="center-msg st st-modeling" style="--d:flex">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div>任务空间建模中…</div>
+          <div class="sub">解析测试目标 → 拆解维度与属性</div>
+        </div>
+        <div class="tree-wrap st st-executing st-done st-eval-keep" style="--d:flex">
+          <div class="tree" id="tree"></div>
+          <div class="legend">
+            <span class="li"><span class="sw sw0"></span>未覆盖</span>
+            <span class="li"><span class="sw sw1"></span>已覆盖</span>
+            <span class="li"><span class="sw sw2"></span>执行中</span>
+            <span style="margin-left:auto;font-family:var(--mono)" id="r3-count">路径 0/7</span>
+          </div>
+        </div>
+        </div>
+        <!-- 生成台宽度分隔条：拖拽改宽，双击回到默认（吃满右侧） -->
+        <div class="r3-split st st-executing st-done st-eval-keep" id="r3-split" style="--d:flex"
+             title="拖拽调整生成台宽度（双击回到默认：吃满右侧）"><i></i></div>
+        <div class="gen-console st st-executing st-done st-eval-keep" style="--d:flex">
+          <div class="gh">生成中：</div>
+          <div class="scroller" id="gen-body"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 区域 2：测试任务输入 -->
+    <section class="panel" id="r2">
+      <div class="p-head">
+        <div class="p-title">02<b>测试任务输入</b></div>
+        <div class="p-status st-gray" id="r2-status">待输入</div>
+      </div>
+      <div class="field-label"><span>测试目标</span><span class="h">自然语言描述</span></div>
+      <textarea id="task-input" placeholder="测试该智能体完成电商购物任务的能力，覆盖商品属性、筛选条件、订单配置、售后属性等维度。"></textarea>
+      <div class="hint" id="r2-hint">提交后自动构建任务空间，并沿维度路径执行智能体能力覆盖测试</div>
+      <!-- 运行参数：真实决定后端用哪个场景的矩阵、生成多少任务与变体（以前是写死的） -->
+      <div class="run-params">
+        <label class="rp" title="决定 r3 树与 r4 矩阵使用哪套真实维度（切换即预览）">场景
+          <select id="run-scene" class="rp-ctl" disabled></select>
+        </label>
+        <label class="rp" title="planner→generator 要生成的任务条数">任务
+          <input id="run-tasks" class="rp-ctl rp-num" type="number" min="1" max="50" step="1" value="4">
+        </label>
+        <label class="rp" title="每条任务的欠指定变体数量">变体
+          <input id="run-variants" class="rp-ctl rp-num" type="number" min="0" max="20" step="1" value="2">
+        </label>
+        <span class="rp-meta" id="run-scene-meta" title="该场景的真实维度规模（来自场景泛化矩阵）"></span>
+      </div>
+      <div class="btn btn-disabled" id="btn-run">提交测试任务</div>
+    </section>
+
+    <!-- 区域 4：能力矩阵 -->
+    <section class="panel" id="r4">
+      <div class="p-head">
+        <div class="p-title">04<b>评测能力矩阵</b><span class="p-src" id="r4-src"></span></div>
+        <div class="p-status st-gray" id="r4-status">空闲</div>
+      </div>
+      <div class="r4-body">
+        <div id="tip"></div>
+        <div class="center-msg st st-idle st-ready" style="--d:flex">
+          <div>等待能力矩阵</div>
+          <div class="sub">任务空间 × 智能能力 的二维覆盖矩阵</div>
+        </div>
+        <div class="center-msg st st-modeling" style="--d:flex">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div>智能体评测维度构建中…</div>
+          <div class="sub">识别 · 规划 · 行动 · 判定</div>
+        </div>
+        <div class="st st-executing st-done st-eval-keep" style="--d:flex;flex:1;min-height:0;flex-direction:column">
+          <div class="matrix" id="matrix"></div>
+          <div class="legend" style="margin-top:8px">
+            <span class="li"><span class="sw sw0"></span>未调用</span>
+            <span class="li"><span class="sw" style="background:rgba(75,172,198,.30)"></span>低频</span>
+            <span class="li"><span class="sw" style="background:rgba(75,172,198,.60)"></span>中频</span>
+            <span class="li"><span class="sw sw2"></span>高频</span>
+            <span style="margin-left:auto;font-family:var(--mono)" id="r4-count">覆盖格 0/91</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右列：区域 5（紧凑指标） + 区域 6（参数覆盖明细） -->
+    <div class="rcol">
+      <!-- 区域 5：测试质量 -->
+      <section class="panel" id="r5">
+        <div class="p-head">
+          <div class="p-title">05<b>测试质量</b><span class="p-src" id="r5-src"></span></div>
+          <div class="p-status st-gray" id="r5-status">等待测试</div>
+        </div>
+        <div class="center-msg st st-evaluating" style="--d:flex">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div id="ev-t">评估中…</div>
+          <div class="sub" id="ev-s">正在汇总测试覆盖统计</div>
+        </div>
+        <div class="st st-idle st-ready st-modeling st-executing st-done" style="--d:contents">
+          <div class="r5-grid" id="r5-grid"></div>
+        </div>
+      </section>
+
+      <!-- 区域 6：参数覆盖明细 -->
+      <section class="panel" id="r6">
+        <div class="p-head">
+          <div class="p-title">06<b>参数覆盖明细</b><span class="p-src" id="r6-src"></span></div>
+          <div class="p-status st-gray" id="r6-status">预留</div>
+        </div>
+        <div class="center-msg st st-idle st-ready st-modeling st-executing st-evaluating" style="--d:flex">
+          <div class="t" id="r6-ph-t">测试结果 · 失败分析 · 详细报告</div>
+          <div class="s" id="r6-ph-s">区域预留，待后续扩展</div>
+        </div>
+        <div class="r6-wrap st st-done" style="--d:flex">
+          <table class="r6-table" id="r6-table"></table>
+        </div>
+      </section>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ================= 数据模型（全部派生自顶部 DEMO 配置） ================= */
+let MODEL = null;                 // 后端 summary 视图模型；null = 纯演示
+let TREE_CATS = null;             // 真实三层树：维度类别 → 泛化维度
+let R5_ITEMS = null;              // 真实 6 项指标
+let R6_ROWS = null;               // 真实参数覆盖明细
+let QUERIES = DEMO.queries.pool;  // 「已泛化query」池
+let CAPS = DEMO.caps;
+let FLAT = CAPS.flatMap(([,cs])=>cs);
+let MISS = DEMO.missCap;
+let SCENE = DEMO.tree.scene, CATEGORY = DEMO.tree.category;
+let DIMS = buildDemoDims();
+/* 演示档位由 buildDemoDims() 计算 */                                // 档位：deep 3 深 / 前 4 中 / 其余浅
+let TOTAL_CELLS = DIMS.length * FLAT.length;
+let LIT_CELLS   = DIMS.length * (FLAT.length - 1);
+const TASK_TEXT = DEMO.task.text;
+
+/* 演示态数据模型：维度 + 档位（deep 3 深 / 前 4 中 / 其余浅） */
+function buildDemoDims(){
+  const dims = DEMO.tree.dims.map((d,i)=>({id:'P'+(i+1), name:d.name, leaves:d.leaves, cases:d.cases??17, valid:d.valid??17, deep:d.deep||[]}));
+  dims.forEach(d=>{
+    d.tier = {};
+    FLAT.forEach(c=>{ if(c!==MISS) d.tier[c]=1; });
+    FLAT.filter(c=>c!==MISS && !d.deep.includes(c)).slice(0,4).forEach(c=>d.tier[c]=2);
+    d.deep.forEach(c=>d.tier[c]=3);
+  });
+  return dims;
+}
+
+/* ================= 时间轴常量（集中可调） ================= */
+const T = {
+  logDelay:600, logStep:420, readyDelay:450,
+  modeling:1300,
+  rowStep:130, leafStep:90, cellStep:105, dwell:320, gap:180,
+  ghostMin:700, ghostMax:1250,
+  genStepMin:240, genStepMax:520,
+};
+/* 亮灯节奏随机化：±jitterRatio 抖动，避免过于规则 */
+const jit=ms=>{const r=DEMO.timing.jitterRatio||0;return Math.max(30,ms*(1-r+Math.random()*2*r))};
+
+/* ================= 全局状态 ================= */
+let phase='idle';        // idle|connecting|ready|modeling|executing|done
+let runToken=0;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const alive=tk=>tk===runToken;
+
+/* ================= 目录树构建 =================
+   连线全部归属到「边」：e-root(场景→类别) e-cat(类别→维度) e-P*(维度→属性)
+   每行自绘：祖先延续竖线(stubs) + 父列竖线 + 拐角；边着色独立于行文字        */
+const edgeEls={};
+function buildTree(){
+  const tree=document.getElementById('tree'); tree.innerHTML='';
+  Object.keys(edgeEls).forEach(k=>delete edgeEls[k]);
+  const COL=16,TEE=10;
+  const mk=(cls,x,parent)=>{const i=document.createElement('i');i.className=cls;i.style.left=x+'px';parent.appendChild(i);return i};
+  const reg=(edge,el)=>{(edgeEls[edge]=edgeEls[edge]||[]).push(el)};
+  const root={label:SCENE,kids:buildTreeKids()};
+  (function walk(nodes,level,stubs){
+    nodes.forEach((n,idx)=>{
+      const last=idx===nodes.length-1;
+      const inEdge=level===1?'e-root':(level>=2&&n.dim?'e-'+n.dim:null);
+      const el=document.createElement('div'); el.className='trow';
+      el.style.paddingLeft=(level*COL+4)+'px';
+      el.innerHTML='<span class="label"'+(level<=1?' style="font-weight:600;color:var(--ink2)"':'')+'>'+n.label+'</span>'
+                   +(n.anchor?'<span class="ptag">'+n.dim+'</span>':'');
+      stubs.forEach(s=>reg(s.edge,mk('vline',s.x,el)));            // 祖先列延续
+      if(level>0){
+        const x=(level-1)*COL+3;
+        reg(inEdge,mk('vline'+(last?' half':''),x,el));            // 父列竖线
+        reg(inEdge,mk('tee',x,el));                                // 拐角
+      }
+      if(n.anchor) el.classList.add('anchor');
+      if(n.dim) el.dataset.dim=n.dim;
+      el.dataset.role=level===0?'root':level===1?'cat':level===2?'dim':'leaf';
+      tree.appendChild(el);
+      if(n.kids){
+        const next=stubs.slice();
+        if(!last && level>0) next.push({x:(level-1)*COL+3, edge:inEdge});  // 父列穿过本子树延续
+        walk(n.kids, level+1, next);
+      }
+    });
+  })([root],0,[]);
+  fitTree();
+}
+/* 树结构：演示态 = 场景→维度类别→维度→属性；
+   真实态 = 场景→维度类别→泛化维度（商品属性 5 / 筛选条件 3 / 交易属性 4 / 售后 1 / 平台 1）。
+   真实矩阵共 14 个泛化维度，连第 4 层（取值）一起渲染会超出 r3 面板高度，
+   故仅在总行数放得下时才带取值层（取值本身在 r6 参数覆盖明细里已完整呈现）。 */
+function buildTreeKids(){
+  if(TREE_CATS){
+    const mk=withLeaves=>TREE_CATS.map(cat=>({label:cat.name,kids:(cat.dims||[]).map(d=>{
+      const node={label:d.name,dim:d.id,anchor:true};
+      if(withLeaves) node.kids=(d.leaves||[]).map(l=>({label:l,dim:d.id}));
+      return node;
+    })}));
+    const rows=list=>1+list.reduce((s,c)=>s+1+(c.kids||[]).reduce((t,d)=>t+1+((d.kids||[]).length),0),0);
+    const full=mk(true), slim=mk(false);
+    return rows(full)<=34?full:slim;
+  }
+  const dimNodes=DIMS.map(d=>({label:d.name,dim:d.id,anchor:true,kids:d.leaves.map(l=>({label:l,dim:d.id}))}));
+  return [{label:CATEGORY,kids:dimNodes}];
+}
+function setEdge(edge,state){
+  (edgeEls[edge]||[]).forEach(el=>{
+    el.classList.remove('run','done');
+    if(state) el.classList.add(state);
+  });
+}
+function fitTree(){
+  const tree=document.getElementById('tree');
+  const n=tree.querySelectorAll('.trow').length;
+  if(tree.clientHeight>0 && n>0)
+    document.documentElement.style.setProperty('--row-h',Math.max(14,Math.min(19,Math.floor(tree.clientHeight/n)))+'px');
+}
+window.addEventListener('resize',fitTree);
+
+/* ================= 矩阵构建（全部显式 grid 定位） ================= */
+function buildMatrix(){
+  const m=document.getElementById('matrix'); m.innerHTML='';
+  /* 行列数随数据走：真实矩阵是 14 维度 × 13 能力，CSS 里写死的 7 行不够用 */
+  m.style.gridTemplateColumns='96px repeat('+FLAT.length+',minmax(0,1fr))';
+  m.style.gridTemplateRows='22px 78px repeat('+Math.max(1,DIMS.length)+',minmax(0,1fr))';
+  const cell=(cls,style,html)=>{const d=document.createElement('div');d.className='mx '+cls;if(style)d.style.cssText=style;if(html)d.innerHTML=html;m.appendChild(d);return d};
+  cell('mx-corner','','维度 ＼ 能力');
+  let col=2; const colStart={}; CAPS.forEach(([,cs])=>{colStart[cs[0]]=col; col+=cs.length;});
+  CAPS.forEach(([g,cs])=>cell('mx-group'+(colStart[cs[0]]>2?' gsep':''),`grid-column:${colStart[cs[0]]}/${colStart[cs[0]]+cs.length};grid-row:1`,g));
+  CAPS.forEach(([,cs])=>cs.forEach((c,i)=>cell('mx-cap'+(i===0&&colStart[cs[0]]>2?' gsep':''),`grid-column:${colStart[cs[0]]+i};grid-row:2`,`<span>${c}</span>`)));
+  DIMS.forEach((d,ri)=>{
+    const row=3+ri;
+    cell('mx-l2',`grid-column:1;grid-row:${row}`,`<span class="p">${d.id}</span>${d.name}`);
+    FLAT.forEach((c,ci)=>{
+      const el=cell('mx-cell'+(ci===0?' gsep':''),`grid-column:${2+ci};grid-row:${row}`,'<div class="fill"></div>');
+      el.dataset.dim=d.id; el.dataset.cap=c;
+      el.addEventListener('mouseenter',()=>showTip(el,d,c));
+      el.addEventListener('mouseleave',hideTip);
+    });
+  });
+}
+function showTip(el,d,c){
+  const tip=document.getElementById('tip');
+  const t=d.tier[c]||0;
+  tip.textContent=`${d.id} ${d.name} × ${c} · ${t===0?'未调用':t===3?'高频调用':t===2?'中频调用':'低频调用'}`;
+  const r=el.getBoundingClientRect(), p=el.closest('.r4-body').getBoundingClientRect();
+  tip.style.display='block';
+  tip.style.left=Math.max(4,Math.min(r.left-p.left+r.width/2-tip.offsetWidth/2, p.width-tip.offsetWidth-4))+'px';
+  tip.style.top=(r.top-p.top-26)+'px';
+}
+function hideTip(){document.getElementById('tip').style.display='none'}
+
+/* ================= 区域 5：指标引擎（执行期冻结 → 评估中 → 滚动结算） ================= */
+let litCount=0,doneDims=0,curFrac=0,curDim=null;
+const R5I=[];
+function buildR5(){
+  const g=document.getElementById('r5-grid'); g.innerHTML=''; R5I.length=0;
+  (R5_ITEMS||DEMO.r5.items).forEach((it,idx)=>{
+    const c=document.createElement('div'); c.className='cell';
+    c.innerHTML=`<div class="l">${it.label}</div><div class="v${it.hl?' hl':''}" id="r5v-${idx}">—</div>`;
+    g.appendChild(c);
+    R5I.push({it, shown:0, target:0, el:c.querySelector('.v')});
+  });
+}
+function fmtVal(e){
+  const t=e.it.type;
+  if(t==='frac')return `${Math.round(e.shown)}/${e.it.value[1]}`;
+  if(t==='pct')return Math.round(e.shown)+'%';
+  if(t==='dec')return e.shown.toFixed(3);
+  return String(Math.round(e.shown));
+}
+function targetOf(it){return it.type==='frac'?it.value[0]:it.value}
+(function ticker(){
+  const k=.18, done=phase==='done';
+  R5I.forEach(e=>{
+    e.shown+=(e.target-e.shown)*k;
+    e.el.textContent=fmtVal(e);
+    e.el.classList.toggle('dim', !done && e.target===0 && e.shown<0.5);
+  });
+  requestAnimationFrame(ticker);
+})();
+function updateCounts(){
+  const cur=Math.min(doneDims+(curFrac>0?1:0),DIMS.length);
+  document.getElementById('r4-count').textContent=`覆盖格 ${litCount}/${TOTAL_CELLS}`;
+  document.getElementById('r3-count').textContent=`路径 ${cur}/${DIMS.length}`;
+}
+function finalizeR5(){
+  /* 真实态：指标在 run 进行中才逐步产生，结算时用最新视图刷新一次再滚动 */
+  if(R5_ITEMS&&R5_ITEMS.length===R5I.length){
+    R5I.forEach((e,i)=>{ e.it={label:R5_ITEMS[i].label,value:R5_ITEMS[i].value,
+                               type:R5_ITEMS[i].type,hl:!!R5_ITEMS[i].hl}; });
+  }
+  R5I.forEach(e=>{ e.target=targetOf(e.it); });
+}
+
+/* ================= 区域 6：参数覆盖明细表 ================= */
+function buildR6(){
+  const t=document.getElementById('r6-table');
+  const head='<tr>'+DEMO.r6.columns.map(c=>`<th>${c}</th>`).join('')+'</tr>';
+  const rows=(R6_ROWS||DEMO.r6.rows).map(r=>{
+    const pct=r.range?Math.round(r.used/r.range*100):0;
+    return `<tr><td class="pm">${r.param}</td><td>${r.dim||'—'}</td>`+
+      `<td class="vd" title="${r.values}">${r.values}</td>`+
+      `<td class="fr">${r.used}/${r.range}</td>`+
+      `<td><span class="cv"><span class="b"><i style="width:${pct}%"></i></span><b>${pct}%</b></span></td></tr>`;
+  }).join('');
+  t.innerHTML=head+rows;
+}
+
+/* ================= 配置注入（HTML 静态文案 ← DEMO） ================= */
+function applyConfig(){
+  Object.entries(DEMO.titles).forEach(([id,t])=>{
+    const b=document.querySelector('#'+id+' .p-title b'); if(b) b.textContent=t;
+  });
+  document.getElementById('console-body').innerHTML=`<span class="waiting">${DEMO.agent.waiting} <span class="caret"></span></span>`;
+  const ta=document.getElementById('task-input');
+  ta.placeholder=DEMO.task.placeholder;
+  document.getElementById('r2-hint').textContent=DEMO.task.hint;
+  setGenHeader(DEMO.queries.header, DEMO.queries.total);
+  document.getElementById('ev-t').textContent=DEMO.r5.evaluating;
+  document.getElementById('ev-s').textContent=DEMO.r5.evaluatingSub;
+  document.getElementById('r6-ph-t').textContent=DEMO.r6.placeholder[0];
+  document.getElementById('r6-ph-s').textContent=DEMO.r6.placeholder[1];
+}
+
+/* ================= 区域 1：真实上传（点击/拖拽，DEMO 槽位来自配置） ================= */
+const upSel={};   // slot -> {name,size} 用户真实选择的文件
+function fmtSize(n){return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB'}
+function buildUploads(){
+  const wrap=document.getElementById('uploads'); wrap.innerHTML='';
+  DEMO.upload.slots.forEach(s=>{
+    const box=document.createElement('div'); box.className='upload'; box.id='up-'+s.id;
+    const input=document.createElement('input'); input.type='file'; input.className='finput';
+    input.accept=s.accept; input.id='file-'+s.id;
+    wrap.appendChild(input);                                   // 挂容器，避免被 renderUpload 的 innerHTML 覆盖
+    box.addEventListener('click',()=>{ if(phase==='idle') input.click(); });
+    input.addEventListener('change',()=>{ const f=input.files[0]; if(f) setFile(s.id,f.name,fmtSize(f.size),f); });
+    ['dragover','dragenter'].forEach(ev=>box.addEventListener(ev,e=>{e.preventDefault();box.classList.add('drag')}));
+    ['dragleave','drop'].forEach(ev=>box.addEventListener(ev,e=>{e.preventDefault();box.classList.remove('drag')}));
+    box.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) setFile(s.id,f.name,fmtSize(f.size),f); });
+    wrap.appendChild(box);
+    renderUpload(s.id);
+  });
+}
+function setFile(slot,name,size,file){ upSel[slot]={name,size,file}; renderUpload(slot); }
+function renderUpload(slot){
+  const s=DEMO.upload.slots.find(x=>x.id===slot); if(!s)return;
+  const box=document.getElementById('up-'+slot); if(!box)return;
+  const f=upSel[slot]||((phase!=='idle')?s.fallback:null);   // 未选择真实文件时，接入后回退演示文件
+  if(f){
+    box.classList.add('filled');
+    box.innerHTML=`<span class="t" style="color:var(--cyan-deep)">✓ ${f.name}</span><span class="s">${f.size}</span>`;
+  }else{
+    box.classList.remove('filled');
+    box.innerHTML=`<span class="ic">⬆</span><span class="t">${s.label}</span><span class="s">${s.hint}</span>`;
+  }
+}
+
+/* ================= 泛化数据集 Console（区域 3 右侧） ================= */
+let genTimer=null,genSeen=0,genStartTimer=null;
+function startGen(){
+  stopGen();
+  const c=document.getElementById('gen-body');
+  c.innerHTML='';
+  genSeen=0;
+  (function add(){
+    const d=document.createElement('div'); d.className='q';
+    const txt=QUERIES[genSeen%QUERIES.length];
+    d.innerHTML=`<em>${String(++genSeen).padStart(3,'0')}</em>${escHtml(txt)}`;
+    d.title=txt;                                     // 卡片再宽也可能截断，悬停看全文
+    c.appendChild(d);
+    c.scrollTop=c.scrollHeight;
+    genTimer=setTimeout(add,T.genStepMin+Math.random()*(T.genStepMax-T.genStepMin));
+  })();
+}
+function stopGen(){clearTimeout(genTimer);clearTimeout(genStartTimer);genTimer=null;genStartTimer=null}
+
+/* 真实态：右侧 console 逐条回放后端生成出来的 query（任务指令 + 欠指定变体） */
+function startLiveGen(list){
+  stopGen();
+  const c=document.getElementById('gen-body');
+  c.innerHTML=''; genSeen=0;
+  const total=(list||[]).length;
+  (function add(){
+    if(genSeen>=total) return;
+    const item=list[genSeen]; genSeen++;
+    const d=document.createElement('div'); d.className='q';
+    d.innerHTML=`<em>${String(item.n||genSeen).padStart(3,'0')}</em>${escHtml(item.text||'')}`;
+    d.title=item.text||'';
+    c.appendChild(d);
+    c.scrollTop=c.scrollHeight;
+    genTimer=setTimeout(add,T.genStepMin+Math.random()*(T.genStepMax-T.genStepMin));
+  })();
+}
+function escHtml(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+/* 生成台标题：标签行 + 数量行（拆两行才不会在窄卡片里被截断） */
+function setGenHeader(label,count){
+  const gh=document.querySelector('.gen-console .gh');
+  if(!gh) return;
+  gh.innerHTML=escHtml(label)+'<span class="n">'+escHtml(String(count))+' 条</span>';
+}
+
+/* ================= 生成台宽度 =================
+   默认：**吃满右侧剩余宽度**（CSS `width:min(calc(100% - 171px),900px)`，只给树留 160px）。
+   手动拖拽：写内联 px 宽度 + 记忆在 localStorage（键带版本号，避免旧默认值残留）；
+   双击分隔条：清掉内联宽度与记忆，回到「吃满」这个默认；
+   未手动拖过时宽度由 CSS 自适应，窗口变大变小都自动跟随。 */
+const GEN_W_KEY='atf.genConsoleWidth.v2';          // 版本号：语义从「固定 200px」改成「吃满」，旧值不沿用
+const GEN_W_MIN=140, GEN_W_MAX=900;                // 手动拖拽的下界 / 上限（上限与 CSS 的 min() 一致）
+const GEN_TREE_MIN=160, GEN_SPLIT_W=11;            // 树至少留这么宽；CSS 的 171px = 这两者之和
+const GEN_BODY_NOMINAL=420;                        // 拿不到布局时的名义容器宽度（jsdom / 隐藏态）
+let genManual=false;                               // 手动拖过 → 不再跟随窗口自适应
+function genConsoleEl(){return document.querySelector('.r3-body .gen-console')}
+function genWidthRange(){
+  const body=document.querySelector('.r3-body');
+  const cw=(body&&body.clientWidth)||0;
+  const avail=(cw>0?cw:GEN_BODY_NOMINAL)-GEN_TREE_MIN-GEN_SPLIT_W;
+  return {min:Math.min(GEN_W_MIN,Math.max(80,avail)),max:Math.max(80,Math.min(GEN_W_MAX,avail))};
+}
+/* w==null → 交还 CSS 默认（吃满剩余宽度）；否则夹到 [min,max] 后写内联宽度 */
+function applyGenWidth(w){
+  const el=genConsoleEl(); if(!el) return 0;
+  if(w==null){ el.style.width=''; return 0; }
+  const r=genWidthRange();
+  const v=Math.max(r.min,Math.min(r.max,Math.round(w)));
+  el.style.width=v+'px';
+  return v;
+}
+function storeGenWidth(v){
+  try{ v==null?localStorage.removeItem(GEN_W_KEY):localStorage.setItem(GEN_W_KEY,String(v)) }catch(e){}
+}
+function resetGenWidth(){                          // 回到「吃满」默认
+  genManual=false; applyGenWidth(null); storeGenWidth(null);
+}
+function initGenSplit(){
+  const split=document.getElementById('r3-split');
+  let dragging=false;
+  let stored=null;
+  try{ const s=parseInt(localStorage.getItem(GEN_W_KEY)||'',10); if(!isNaN(s)) stored=s; }catch(e){}
+  if(stored){ genManual=true; applyGenWidth(stored); }   // 上次手动拖过的宽度
+  else { genManual=false; applyGenWidth(null); }         // 默认：吃满，由 CSS 自适应
+  if(split){
+    const dragTo=clientX=>{
+      const body=document.querySelector('.r3-body'); if(!body) return;
+      const v=applyGenWidth(body.getBoundingClientRect().right-clientX);
+      genManual=true; storeGenWidth(v);
+    };
+    split.addEventListener('mousedown',e=>{
+      dragging=true; split.classList.add('drag');
+      document.body.style.cursor='col-resize'; document.body.style.userSelect='none';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove',e=>{ if(dragging) dragTo(e.clientX); });
+    window.addEventListener('mouseup',()=>{
+      if(!dragging) return;
+      dragging=false; split.classList.remove('drag');
+      document.body.style.cursor=''; document.body.style.userSelect='';
+    });
+    split.addEventListener('dblclick',resetGenWidth);
+  }
+  window.addEventListener('resize',()=>{           // 手动宽度只做夹回；默认宽度交给 CSS 跟随
+    if(!genManual) return;
+    const el=genConsoleEl(); if(!el) return;
+    const cur=parseInt(el.style.width,10); if(!isNaN(cur)) applyGenWidth(cur);
+  });
+}
+
+/* ================= 幽灵文字 =================
+   演示态用固定装饰文案；真实态由 refreshGhosts() 换成真实事件（任务/校验/已覆盖维度） */
+let GHOSTS=DEMO.ghostWords.slice();
+const SLOTS=[['8%','12%'],['45%','30%'],['12%','62%'],['52%','70%'],['70%','18%'],['30%','84%'],['62%','50%'],['85%','62%']];
+const SLOTS_R3=[['10%','12%'],['40%','30%'],['12%','62%'],['48%','78%'],['62%','18%'],['30%','90%']];  // 树区较窄且需避开泛化台
+let ghostTimer=null,lastSlot=-1;
+function startGhosts(){
+  stopGhosts();
+  (function spawn(){
+    const inR3=Math.random()<0.5;
+    const slots=inR3?SLOTS_R3:SLOTS;
+    let s; do{ s=Math.floor(Math.random()*slots.length) }while(s===lastSlot);
+    lastSlot=s;
+    const host=inR3?document.querySelector('#r3 .tree'):document.querySelector('#r4 .r4-body');
+    const g=document.createElement('span'); g.className='ghost';
+    g.textContent=GHOSTS[Math.floor(Math.random()*GHOSTS.length)];
+    const life=500+Math.random()*1000;
+    g.style.setProperty('--life',life+'ms');
+    g.style.left=slots[s][0]; g.style.top=slots[s][1];
+    host.appendChild(g);
+    setTimeout(()=>g.remove(),life+80);
+    ghostTimer=setTimeout(spawn,T.ghostMin+Math.random()*(T.ghostMax-T.ghostMin));
+  })();
+}
+function stopGhosts(){clearTimeout(ghostTimer);ghostTimer=null;document.querySelectorAll('.ghost').forEach(g=>g.remove())}
+
+/* ================= UI 状态机 ================= */
+function setPhase(p){
+  phase=p; document.body.dataset.phase=p;
+  const S=(id,txt,cls)=>{const e=document.getElementById(id);e.textContent=txt;e.className='p-status '+cls};
+  const B=(id,txt,cls,dis)=>{const e=document.getElementById(id);e.textContent=txt;e.className='btn '+cls;e.style.pointerEvents=dis?'none':''};
+  if(p==='idle'){
+    S('r1-status','等待接入','st-gray');S('r2-status','待输入','st-gray');
+    S('r3-status','空闲','st-gray');S('r4-status','空闲','st-gray');S('r5-status','等待测试','st-gray');
+    B('btn-connect','接入智能体','btn-primary');B('btn-run','提交测试任务','btn-disabled',true);
+  }else if(p==='connecting'){
+    S('r1-status','接入中…','st-cyan');B('btn-connect','接入中…','btn-disabled',true);B('btn-run','提交测试任务','btn-disabled',true);
+  }else if(p==='ready'){
+    S('r1-status','Agent Ready','st-green');S('r2-status','就绪','st-cyan');S('r3-status','就绪','st-gray');
+    S('r4-status','就绪','st-gray');S('r5-status','等待测试','st-gray');
+    B('btn-connect','已接入','btn-disabled',true);B('btn-run','提交测试任务','btn-primary');
+    document.getElementById('task-input').value=TASK_TEXT;
+  }else if(p==='modeling'){
+    S('r2-status','执行中','st-cyan');S('r3-status','建模中','st-cyan');S('r4-status','构建中','st-cyan');S('r5-status','统计中','st-cyan');
+    B('btn-run','提交测试任务','btn-disabled',true);
+  }else if(p==='executing'){
+    S('r2-status','执行中','st-cyan');S('r3-status','执行中','st-cyan');S('r4-status','填充中','st-cyan');S('r5-status','待评估','st-gray');S('r6-status','统计中','st-cyan');
+    B('btn-run','测试执行中…','btn-disabled',true);
+    requestAnimationFrame(fitTree);
+  }else if(p==='evaluating'){
+    S('r2-status','评估中','st-cyan');S('r3-status','已覆盖 '+doneDims+'/'+DIMS.length,'st-dark');S('r4-status','覆盖 '+Math.round(100*litCount/Math.max(1,TOTAL_CELLS))+'%','st-dark');S('r5-status','评估中…','st-cyan');S('r6-status','统计中','st-cyan');
+    B('btn-run','评估中…','btn-disabled',true);
+  }else if(p==='done'){
+    S('r2-status','已完成','st-dark');S('r3-status','已覆盖 '+doneDims+'/'+DIMS.length,'st-dark');S('r4-status','覆盖 '+Math.round(100*litCount/Math.max(1,TOTAL_CELLS))+'%','st-dark');S('r5-status','完成','st-dark');S('r6-status','已生成','st-dark');
+    B('btn-run','重新测试','btn-outline');
+  }
+  syncStepBar(p);
+  /* 运行中不许改参数，避免显示的树/矩阵与提交时的参数不一致 */
+  setRunControlsEnabled(p==='idle'||p==='ready'||p==='done');
+}
+
+/* ================= 顶部步骤条同步（index 整体 = step1） ================= */
+function updateStepBar(n,status){
+  const lb={idle:'待命',running:'运行中',completed:'完成',failed:'失败'}[status]||status;
+  const cls=status==='completed'?'is-completed':(status==='failed'?'is-error':(status==='running'?'is-active':''));
+  const el=document.getElementById('mp-step'+n+'-status'); if(el) el.textContent=lb;
+  const se=document.querySelector('.mp-step[data-step="'+n+'"]');
+  if(se){
+    se.classList.remove('is-active','is-completed','is-error');
+    if(cls) se.classList.add(cls);
+    /* 完成后圆圈里显示 ✓，而不是继续显示步骤号 */
+    const num=se.querySelector('.mp-step-num');
+    if(num) num.textContent = status==='completed' ? '✓' : (status==='failed' ? '✕' : String(n));
+  }
+}
+function syncStepBar(p){
+  if(p==='done') updateStepBar(1,'completed');
+  else if(p==='failed') updateStepBar(1,'failed');
+  else if(p==='modeling'||p==='executing'||p==='evaluating') updateStepBar(1,'running');
+  else{
+    updateStepBar(1,'idle');
+    const s1=document.querySelector('.mp-step[data-step="1"]'); if(s1) s1.classList.add('is-current');
+  }
+  for(let n=2;n<=4;n++) updateStepBar(n,'idle');   // 2/3/4 本次不实现，恒为「待命」
+}
+/* 顶部右侧徽标：只显示「数据集生成引擎」（唯一无法从页面推断、且会影响数字解读的信息），
+   后端连接状态与场景放到 tooltip —— 场景在 r3 树的根节点已经写着。
+   引擎以**本次运行**为准：它可能来自 r1 上传的智能体配置（前端传什么就用什么），
+   此时 /api/health 的全局 llm_configured 仍是 false，所以不能只看 health。 */
+function updateBarMeta(){
+  const el=document.getElementById('mp-bar-meta'), txt=document.getElementById('mp-bar-meta-text');
+  if(!el||!txt)return;
+  el.classList.remove('live','mock','demo');
+  const scene=SCENE||'—';
+  if(API&&API.live){
+    const h=API.state.health||{};
+    const eng=(MODEL&&MODEL.engine)||h.engine||'mock';
+    const model=(((MODEL&&MODEL.llm_model)||h.llm_model||'')+'').trim();
+    const src=((MODEL&&MODEL.llm_source)||h.llm_config_source||'')+'';
+    const label=eng==='llm'?('LLM '+model).trim():(eng==='llm+mock'?'部分 mock':'mock');
+    el.classList.add(eng==='llm'?'live':'mock');
+    txt.textContent=label;
+    const why=eng==='llm'?('数据集生成引擎：LLM '+model)
+      :eng==='llm+mock'?'数据集生成引擎：LLM 调用失败已降级为 mock（四个区域的标记会显示「部分 mock」）'
+      :'数据集生成引擎：mock（没有可用 LLM —— 在 r1 上传含 api/key/model 的智能体配置即可被 step1 直接使用，也可另建 backend/config.yaml）';
+    el.title=why
+      +(src?('\nLLM 配置来源：'+src):'')
+      +'\n后端：已连接 '+location.origin
+      +'\n场景：'+scene+'（决定 r3 树与 r4 矩阵使用哪套维度）';
+  }else{
+    el.classList.add('demo');
+    txt.textContent='演示模式';
+    el.title='未连接后端：页面回退到内置演示动画（数据为演示常量，非真实 step1 产出）';
+  }
+}
+
+/* ================= 主流程 ================= */
+async function connectDemo(){
+  if(phase!=='idle')return;
+  const tk=++runToken;
+  setPhase('connecting');
+  DEMO.upload.slots.forEach(s=>renderUpload(s.id));   // 空槽位回退演示文件
+  const body=document.getElementById('console-body');
+  body.innerHTML='';
+  const t0=performance.now();
+  await sleep(T.logDelay); if(!alive(tk))return;
+  const lines=DEMO.agent.logs;
+  for(const line of lines){
+    const el=document.createElement('div'); el.className='log-line';
+    const dt=(performance.now()-t0)/1000;
+    el.innerHTML=`<span class="ts">[00:0${Math.floor(dt)}.${String(Math.floor(dt%1*100)).padStart(2,'0')}]</span>${line} <span style="color:#B7BDC7">✓</span>`;
+    body.appendChild(el);
+    await sleep(T.logStep); if(!alive(tk))return;
+  }
+  await sleep(T.readyDelay); if(!alive(tk))return;
+  const ok=document.createElement('div'); ok.className='log-line ok-line';
+  const rdt=(performance.now()-t0)/1000;
+  ok.innerHTML=`<span class="ts">[00:${String(Math.floor(rdt)).padStart(2,'0')}.${String(Math.floor(rdt%1*100)).padStart(2,'0')}]</span>● ${DEMO.agent.ready}`;
+  body.appendChild(ok);
+  setPhase('ready');
+}
+
+function resetVisuals(){
+  document.querySelectorAll('.trow').forEach(r=>r.classList.remove('run','done'));
+  document.querySelectorAll('.vline,.tee').forEach(e=>e.classList.remove('run','done'));
+  document.querySelectorAll('#matrix .mx-cell').forEach(c=>c.classList.remove('t1','t2','t3','now','ra'));
+  litCount=0;doneDims=0;curFrac=0;curDim=null;
+  R5I.forEach(e=>{e.target=0;e.shown=0});
+  updateCounts();
+  stopGhosts();
+  stopGen();
+  DEMO.upload.slots.forEach(s=>renderUpload(s.id));
+}
+
+async function runDemo(){
+  if(phase!=='ready'&&phase!=='done')return;
+  const tk=++runToken;
+  resetVisuals();
+  setPhase('modeling');
+  await sleep(T.modeling); if(!alive(tk))return;
+  setPhase('executing');
+  startGhosts();
+  /* 树开始有进度后 X 秒，右侧信息流才开始渲染 */
+  genStartTimer=setTimeout(()=>{ if(alive(tk)) startGen(); }, (DEMO.timing.genStartDelaySec||0)*1000);
+  await sleep(400); if(!alive(tk))return;      // 树/矩阵淡入
+
+  const treeRow=(dim,role,label)=>{
+    let els=[...document.querySelectorAll(`.trow[data-dim="${dim}"][data-role="${role}"]`)];
+    if(label) els=els.filter(e=>e.querySelector('.label').textContent===label);
+    return els[0];
+  };
+  const rootRow=()=>document.querySelector('.trow[data-role="root"]');
+  const catRow=()=>document.querySelector('.trow[data-role="cat"]');
+
+  for(let i=0;i<DIMS.length;i++){
+    const d=DIMS[i];
+    curDim=d; curFrac=0;
+    document.querySelectorAll(`.mx-cell[data-dim="${d.id}"]`).forEach(c=>c.classList.add('ra'));
+    if(doneDims===0) setEdge('e-root','run');    // 根拐角仅首路径点亮，之后保持已覆盖
+    setEdge('e-'+d.id,'run');
+    const light=async el=>{ if(!el)return; el.classList.remove('done'); el.classList.add('run'); await sleep(jit(T.rowStep)); };
+    await light(rootRow()); if(!alive(tk))return;
+    await light(catRow()); if(!alive(tk))return;
+    await light(treeRow(d.id,'dim')); if(!alive(tk))return;
+
+    const caps=FLAT.filter(c=>c!==MISS);
+    const order=DEMO.timing.shuffleCells?[...caps].sort(()=>Math.random()-0.5):caps;
+    let prevCell=null;
+    const fillMatrix=(async()=>{
+      for(let j=0;j<order.length;j++){
+        const cell=document.querySelector(`.mx-cell[data-dim="${d.id}"][data-cap="${order[j]}"]`);
+        if(prevCell) prevCell.classList.remove('now');   // 「当前格」描边全局仅一个
+        prevCell=cell;
+        cell.classList.add('t'+d.tier[order[j]],'now');
+        litCount++; curFrac=(j+1)/order.length;
+        updateCounts();
+        await sleep(jit(T.cellStep)); if(!alive(tk))return;
+      }
+    })();
+    const lightLeaves=(async()=>{
+      for(const leaf of d.leaves){
+        const el=treeRow(d.id,'leaf',leaf);
+        if(el) el.classList.add('run');
+        await sleep(jit(T.leafStep)); if(!alive(tk))return;
+      }
+    })();
+    await Promise.all([fillMatrix,lightLeaves]); if(!alive(tk))return;
+    await sleep(jit(T.dwell)); if(!alive(tk))return;
+
+    [rootRow(),catRow(),treeRow(d.id,'dim'),
+     ...document.querySelectorAll(`.trow[data-dim="${d.id}"]`)].forEach(el=>{
+      if(el){el.classList.remove('run');el.classList.add('done')}
+    });
+    document.querySelectorAll(`.mx-cell[data-dim="${d.id}"]`).forEach(c=>c.classList.remove('ra','now'));
+    if(doneDims===0) setEdge('e-root','done');
+    setEdge('e-'+d.id,'done');
+    doneDims++; curFrac=0; curDim=null;
+    updateCounts();
+    await sleep(jit(T.gap)); if(!alive(tk))return;
+  }
+  stopGhosts(); stopGen();
+  setPhase('evaluating');
+  await sleep((DEMO.timing.evaluateDelaySec??1.3)*1000); if(!alive(tk))return;
+  finalizeR5();
+  setPhase('done');
+}
+
+/* ================================================================
+   真实数据接线（后端 step1：planner → generator → verifier → evaluator）
+   后端可用 → 走真实数据；任何一步失败 → 自动回退到上面的纯演示流程
+   ================================================================ */
+let apiAgentId='', apiRunId=0, apiStream=null, apiAgentProfile=null;
+let LIVE_SCENES=null, liveScene='';
+let pendingView=null, pumping=false, liveBuilt=false, genStarted=false, evalSince=0;
+let litPairs=new Set(), litDims=new Set();
+
+async function readConfigText(){
+  const sel=upSel.cfg;
+  if(!sel||!sel.file||typeof sel.file.text!=='function') return '';
+  try{ return await sel.file.text(); }catch(e){ return ''; }
+}
+function agentPayload(){
+  const pick=slot=>{
+    const s=DEMO.upload.slots.find(x=>x.id===slot);
+    const sel=upSel[slot];
+    return sel?{name:sel.name,size:sel.size}:{name:s.fallback.name,size:s.fallback.size};
+  };
+  return {binary:pick('bin'), config:pick('cfg')};
+}
+function matrixDimsPayload(){
+  const list=LIVE_SCENES||[];
+  const want=selectedScene()||liveScene;
+  const sc=list.find(s=>s.name===want)||list[0];
+  if(!sc) return null;
+  return {scene:sc.name, categories:(sc.categories||[]).map(c=>({name:c.name, dims:(c.dims||[]).map(d=>d.name)}))};
+}
+
+/* ================= 运行参数（场景 / 任务数 / 变体数） =================
+   以前场景写死 scenes[0]、任务数/变体数写死 4/2；现在由用户真实指定并传给后端。 */
+function selectedScene(){
+  const sel=document.getElementById('run-scene');
+  return (sel&&sel.value)?sel.value:(liveScene||'');
+}
+function runTasks(){
+  const v=parseInt((document.getElementById('run-tasks')||{}).value,10);
+  return isNaN(v)?4:Math.min(50,Math.max(1,v));
+}
+function runVariants(){
+  const v=parseInt((document.getElementById('run-variants')||{}).value,10);
+  return isNaN(v)?2:Math.min(20,Math.max(0,v));
+}
+function setRunControlsEnabled(on){
+  const live=!!(API&&API.live);
+  const sel=document.getElementById('run-scene');
+  if(sel) sel.disabled=!(live&&on);
+  ['run-tasks','run-variants'].forEach(id=>{
+    const e=document.getElementById(id); if(e) e.disabled=!(live&&on);
+  });
+}
+function initRunControls(){
+  const sel=document.getElementById('run-scene');
+  if(!sel) return;
+  const live=!!(API&&API.live);
+  const names=live?((LIVE_SCENES||[]).map(s=>s.name)):[DEMO.tree.scene];
+  sel.innerHTML=names.map(n=>`<option>${escHtml(n)}</option>`).join('');
+  if(live){
+    if(!liveScene) liveScene=names[0]||'';
+    sel.value=liveScene;
+    sel.onchange=onSceneChange;
+  }
+  setRunControlsEnabled(true);
+}
+async function onSceneChange(){
+  liveScene=selectedScene();
+  SCENE=liveScene;
+  updateBarMeta();
+  await previewScene(liveScene);
+}
+/* 场景预览：换场景后立刻用真实矩阵显示该场景的维度规模；若已有跑完的结果，说明它属于上一个场景，回到"就绪" */
+async function previewScene(name){
+  if(!(API&&API.live)||!name) return;
+  const meta=document.getElementById('run-scene-meta');
+  try{
+    const v=await API.scenePreview(name, apiAgentId);
+    if(!v||!v.ok) return;
+    const cats=((v.tree||{}).categories||[]).length;
+    const dims=((v.tree||{}).dims||[]).length;
+    const total=((v.matrix||{}).total)||0;
+    if(meta) meta.textContent=`${cats} 类别 · ${dims} 维度 · ${total} 格`;
+    if(phase==='done') resetForSceneChange();
+  }catch(e){ console.warn('[api] 场景预览失败：',e); }
+}
+function resetForSceneChange(){
+  MODEL=null; TREE_CATS=null; R5_ITEMS=null; R6_ROWS=null;
+  liveBuilt=false; genStarted=false; pendingView=null;
+  litPairs=new Set(); litDims=new Set();
+  resetVisuals();
+  buildTree(); buildMatrix(); buildR5(); buildR6(); updateCounts();
+  applySourceTags(null);
+  setPhase('ready');
+}
+
+/* ================= 数据来源标记（r3/r4/r5/r6） =================
+   四个区域都标明「哪部分是真实结构、哪部分是本次生成结果」：
+   mock 时明确标注 —— 算法是真的，输入是规则生成的，不能当质量结论。
+   （r3/r4 的标题旁一直有 #r3-src / #r4-src 空位，以前没填，看的人无从判断可信度。） */
+const SRC_META={
+  mock:   {label:'mock 数据',cls:''},
+  mixed:  {label:'部分 mock',cls:''},
+  llm:    {label:'LLM 实测',cls:' st-llm'},
+  preview:{label:'场景预览',cls:' st-llm'},
+};
+const SRC_TAIL={
+  mock:'本次未配置 LLM：结构与档位是真的，覆盖结果是内置规则生成的 mock。',
+  mixed:'本次有步骤降级为 mock：结构与档位是真的，覆盖结果部分为规则生成。',
+  llm:'本次运行由真实 LLM 产出。',
+  preview:'尚未运行：只按场景矩阵展示结构与档位，覆盖进度为 0。',
+};
+const AREA_SRC={
+  r3:'· 真实部分：场景 → 维度类别 → 泛化维度的结构、P1..Pn 锚点、行内取值，来自场景泛化矩阵与 planner 参数空间。\n'
+    +'· 本次生成部分：哪几行点亮（已覆盖），来自生成任务的 covered_dimensions。',
+  r4:'· 真实部分：行 = 场景泛化矩阵的泛化维度，列 = 13 个能力（由 29 个 L2 映射而来），t1/t2/t3 档位由矩阵符号 ○/△/● 折算；'
+    +'整列不点亮的那列来自智能体接入声明的能力缺口。\n'
+    +'· 本次生成部分：点亮格（覆盖到的 维度 × 能力），取决于本次生成的任务是否落到该维度。',
+  r5:'六项指标由本次运行的 planner / generator / verifier / evaluator 产出算出。',
+  r6:'参数与取值空间来自 planner.parameter_space；已用/范围按本次生成结果统计。',
+};
+function applySourceTags(view){
+  const src=(view&&view.data_source)||'';
+  const meta=SRC_META[src]||{label:'',cls:''};
+  ['r3','r4','r5','r6'].forEach(area=>{
+    const el=document.getElementById(area+'-src');
+    if(!el) return;
+    el.textContent=meta.label;
+    el.className='p-src'+meta.cls;
+    el.title=meta.label?('数据来源：'+meta.label+'　'+SRC_TAIL[src]+'\n'+AREA_SRC[area]):'';
+  });
+}
+
+/* ================= 幽灵文字来源：真实事件 ================= */
+function substepLabel(k){
+  return {planner:'计划',generator:'生成',verifier:'检查',evaluator:'评估'}[k]||k;
+}
+function refreshGhosts(view){
+  const pool=[];
+  (((view||{}).matrix||{}).rows||[]).forEach(r=>{ if(r.active) pool.push('已覆盖 '+r.dim); });
+  const p=(view||{}).progress||{};
+  const gt=p.generator_total||0, gc=p.generator_completed||0;
+  if(gt) pool.push(`任务 ${gc}/${gt}`);
+  const vt=p.verifier_total||0, vc=p.verifier_completed||0;
+  if(vt) pool.push(`校验 ${vc}/${vt}`);
+  const sub=p.substeps||{};
+  ['planner','generator','verifier','evaluator'].forEach(k=>{
+    if(sub[k]==='running') pool.push(substepLabel(k)+' 进行中');
+  });
+  ((view||{}).queries||[]).slice(-8).forEach(q=>pool.push(String(q.text||'').slice(0,12)));
+  GHOSTS=pool.length?pool:['等待生成结果…'];
+}
+function renderAgentLog(l){
+  const body=document.getElementById('console-body');
+  const el=document.createElement('div'); el.className='log-line';
+  /* 三态：✓ 实测通过 / ! 实测未通过 / – 没测出结论（未实测，不要当成通过） */
+  const mark = l.ok===true ? '<span style="color:#B7BDC7">✓</span>'
+             : l.ok===false ? '<span style="color:#C9A227">!</span>'
+             : '<span style="color:#C3C9D2">–</span>';
+  el.innerHTML=`<span class="ts">[${escHtml(l.ts||'')}]</span>${escHtml(l.text||'')} ${mark}`;
+  body.appendChild(el);
+}
+function renderAgentReady(profile){
+  const body=document.getElementById('console-body');
+  const last=body.querySelector('.log-line:last-child .ts');
+  const ok=document.createElement('div'); ok.className='log-line ok-line';
+  const name=(profile&&profile.name)||'Agent';
+  const model=(profile&&profile.model&&profile.model!=='未声明')?(' · '+profile.model):'';
+  ok.innerHTML=`<span class="ts">${last?last.textContent:''}</span>● ${escHtml(name)}${escHtml(model)} · ${DEMO.agent.ready}`;
+  body.appendChild(ok);
+}
+
+/* 用后端 summary 覆盖全局数据模型（DOM 结构与渲染算法不变） */
+function applyModel(v){
+  MODEL=v;
+  const mm=v.matrix||{};
+  if(mm.caps13&&mm.caps13.length){
+    const groups=[];
+    mm.caps13.forEach(c=>{
+      let g=groups.find(x=>x[0]===c.group);
+      if(!g){ g=[c.group,[]]; groups.push(g); }
+      g[1].push(c.cap);
+    });
+    CAPS=groups;
+  }
+  FLAT=CAPS.flatMap(([,cs])=>cs);
+  MISS=(mm.missing&&mm.missing[0])||'';
+  SCENE=(v.tree&&v.tree.scene)||SCENE;
+  TREE_CATS=(v.tree&&v.tree.categories)||null;
+  const rows=mm.rows||[];
+  DIMS=((v.tree&&v.tree.dims)||[]).map(d=>{
+    const row=rows.find(r=>r.dim_id===d.id)||{};
+    const o={id:d.id,name:d.name,leaves:[],cases:0,valid:0,deep:[],tier:{}};
+    FLAT.forEach((c,ci)=>{ o.tier[c]=(row.tiers&&row.tiers[ci])||0; });
+    return o;
+  });
+  TOTAL_CELLS=DIMS.length*FLAT.length;
+  LIT_CELLS=(mm.reachable!=null)?mm.reachable:TOTAL_CELLS;
+  R5_ITEMS=(v.metrics&&v.metrics.length)
+    ? v.metrics.map(m=>({label:m.label,value:m.value,type:m.type,hl:!!m.hl})) : null;
+  R6_ROWS=(v.params||[]).length?v.params:null;
+  if((v.queries||[]).length) QUERIES=v.queries.map(q=>q.text);
+  setGenHeader('已泛化query', (v.queries||[]).length);
+  applySourceTags(v);
+  refreshGhosts(v);
+  updateBarMeta();
+}
+
+async function connect(){
+  if(phase!=='idle')return;
+  if(!API.live){
+    const ok=await API.probe();
+    updateBarMeta();
+    if(!ok) return connectDemo();
+  }
+  const tk=++runToken;
+  setPhase('connecting');
+  DEMO.upload.slots.forEach(s=>renderUpload(s.id));
+  const body=document.getElementById('console-body');
+  body.innerHTML='';
+  try{
+    const payload=Object.assign(agentPayload(),{config_content:await readConfigText()});
+    const res=await API.agentConnect(payload);
+    if(!res.ok) throw new Error(res.error||'接入失败');
+    apiAgentId=res.agent_id;
+    const seen=new Set();
+    for(;;){
+      if(!alive(tk))return;
+      const st=await API.agentStatus(apiAgentId);
+      if(!st.ok) throw new Error(st.error||'接入状态异常');
+      (st.logs||[]).forEach((l,i)=>{ if(seen.has(i))return; seen.add(i); renderAgentLog(l); });
+      if(st.phase==='ready'){ apiAgentProfile=st.profile; renderAgentReady(st.profile); break; }
+      await sleep(220);
+    }
+    if(!alive(tk))return;
+    setPhase('ready');
+  }catch(e){
+    console.warn('[api] 智能体接入失败，回退演示：',e);
+    API.state.mode='demo'; updateBarMeta();
+    return connectDemo();
+  }
+}
+
+async function run(){
+  if(phase!=='ready'&&phase!=='done')return;
+  if(!API.live){ updateBarMeta(); return runDemo(); }
+  const tk=++runToken;
+  resetVisuals();
+  liveBuilt=false; genStarted=false; pendingView=null;
+  litPairs=new Set(); litDims=new Set();
+  MODEL=null; TREE_CATS=null; R5_ITEMS=null; R6_ROWS=null;
+  setPhase('modeling');
+  try{
+    const brief=(document.getElementById('task-input').value||'').trim()||DEMO.task.text;
+    const scene=selectedScene()||liveScene;
+    liveScene=scene;
+    const res=await API.createDataset({
+      brief, scene, task_count:runTasks(), variant_count:runVariants(),
+      agent_id:apiAgentId, execute:true, matrix_dimensions:matrixDimsPayload()
+    });
+    if(!res.ok) throw new Error(res.error||'step1 启动失败');
+    apiRunId=res.id;
+    if(apiStream&&apiStream.stop) apiStream.stop();
+    apiStream=API.stream(res.id, v=>onView(v,tk));
+  }catch(e){
+    console.warn('[api] step1 启动失败，回退演示：',e);
+    API.state.mode='demo'; updateBarMeta();
+    return runDemo();
+  }
+}
+
+function onView(v,tk){
+  if(!alive(tk))return;
+  if(!liveBuilt){
+    liveBuilt=true;
+    applyModel(v);
+    buildTree(); buildMatrix(); buildR5(); buildR6(); updateCounts();
+  }else{
+    applyModel(v);
+  }
+  pendingView=v;
+  if(!pumping) pump();
+}
+/* 视图排队串行渲染：后端每完成一条任务推一次，这里按真实进度逐格点亮 */
+async function pump(){
+  pumping=true;
+  while(pendingView){
+    const v=pendingView; pendingView=null;
+    try{ await renderLive(v); }catch(e){ console.warn('[api] 渲染异常：',e); }
+  }
+  pumping=false;
+}
+
+async function renderLive(v){
+  const ph=v.phase;
+  if(ph==='failed'){ showError(v.error||'step1 执行失败'); return; }
+  if(ph==='modeling'){ if(phase!=='modeling') setPhase('modeling'); return; }
+  if(ph!=='executing'&&ph!=='evaluating'&&ph!=='done') return;
+
+  if(phase==='modeling'||phase==='ready'||phase==='done'){
+    setPhase('executing');
+    startGhosts();
+  }
+  if(!genStarted&&(v.queries||[]).length){ genStarted=true; startLiveGen(v.queries); }
+  await lightProgress(v);
+
+  if(ph==='evaluating'){
+    if(phase!=='evaluating'){ setPhase('evaluating'); evalSince=Date.now(); }
+    finalizeR5();
+    return;
+  }
+  if(ph==='done'){
+    if(phase!=='evaluating'){ setPhase('evaluating'); evalSince=Date.now(); }
+    const wait=(DEMO.timing.evaluateDelaySec??1.3)*1000-(Date.now()-evalSince);
+    if(wait>0) await sleep(wait);
+    buildR6();
+    finalizeR5();
+    stopGhosts(); stopGen();
+    setPhase('done');
+  }
+}
+
+/* 按后端给定的「已覆盖维度 + 真实档位」逐格点亮树与矩阵 */
+async function lightProgress(v){
+  const rows=(v.matrix||{}).rows||[];
+  if(!rows.length) return;
+  const dimRow=id=>document.querySelector('.trow[data-dim="'+id+'"][data-role="dim"]');
+  const rootRow=()=>document.querySelector('.trow[data-role="root"]');
+  const catRows=()=>[...document.querySelectorAll('.trow[data-role="cat"]')];
+
+  for(const r of rows){
+    if(!r.active||litDims.has(r.dim_id)) continue;
+    if(litDims.size===0){
+      setEdge('e-root','run');
+      const rr=rootRow(); if(rr){ rr.classList.remove('done'); rr.classList.add('run'); }
+      catRows().forEach(el=>{ el.classList.remove('done'); el.classList.add('run'); });
+      await sleep(jit(T.rowStep));
+    }
+    setEdge('e-'+r.dim_id,'run');
+    const dr=dimRow(r.dim_id);
+    if(dr){ dr.classList.remove('done'); dr.classList.add('run'); }
+    document.querySelectorAll('.mx-cell[data-dim="'+r.dim_id+'"]').forEach(c=>c.classList.add('ra'));
+    await sleep(jit(T.rowStep));
+
+    const caps=FLAT.filter(c=>c!==MISS);
+    const order=DEMO.timing.shuffleCells?[...caps].sort(()=>Math.random()-0.5):caps;
+    let prev=null;
+    for(const cap of order){
+      const ci=FLAT.indexOf(cap);
+      const cell=document.querySelector('.mx-cell[data-dim="'+r.dim_id+'"][data-cap="'+cap+'"]');
+      const tier=(r.tiers&&r.tiers[ci])||0;
+      if(prev) prev.classList.remove('now');
+      prev=cell;
+      if(cell&&tier>0){ cell.classList.add('t'+tier,'now'); litPairs.add(r.dim_id+':'+ci); }
+      litCount=litPairs.size; curFrac=(ci+1)/FLAT.length;
+      updateCounts();
+      await sleep(jit(T.cellStep));
+    }
+    if(prev) prev.classList.remove('now');
+
+    for(const el of document.querySelectorAll('.trow[data-dim="'+r.dim_id+'"][data-role="leaf"]')){
+      el.classList.add('run');
+      await sleep(jit(T.leafStep));
+    }
+    document.querySelectorAll('.trow[data-dim="'+r.dim_id+'"]').forEach(el=>{
+      el.classList.remove('run'); el.classList.add('done');
+    });
+    document.querySelectorAll('.mx-cell[data-dim="'+r.dim_id+'"]').forEach(c=>c.classList.remove('ra','now'));
+    setEdge('e-'+r.dim_id,'done');
+    litDims.add(r.dim_id); doneDims=litDims.size; curFrac=0;
+    updateCounts();
+    await sleep(jit(T.gap));
+  }
+  rows.forEach(r=>{ if(r.active) litDims.add(r.dim_id); });
+  doneDims=litDims.size;
+  if(litDims.size){ setEdge('e-root','done'); }
+  updateCounts();
+}
+
+function showError(msg){
+  const t=document.getElementById('r6-ph-t'); if(t) t.textContent='执行失败';
+  const s=document.getElementById('r6-ph-s'); if(s) s.textContent=String(msg||'');
+  const body=document.getElementById('console-body');
+  if(body){
+    const el=document.createElement('div'); el.className='log-line';
+    el.innerHTML=`<span class="ts">[Step1]</span>执行失败: ${escHtml(msg||'')}`;
+    body.appendChild(el);
+  }
+  updateStepBar(1,'failed');
+}
+
+/* ================= 事件与初始化 ================= */
+document.getElementById('btn-connect').addEventListener('click',connect);
+document.getElementById('btn-run').addEventListener('click',()=>{if(phase==='ready'||phase==='done')run()});
+applyConfig(); buildUploads(); buildTree(); buildMatrix(); buildR5(); buildR6(); updateCounts(); initGenSplit(); setPhase('idle');
+
+/* 传输层初始化：探测后端 → 预取场景矩阵（用于 planner 维度注入与场景选择） */
+(async function initTransport(){
+  let ok=false;
+  try{ ok=await API.probe(); }catch(e){ ok=false; }
+  if(ok){
+    try{
+      const mx=await API.matrix();
+      LIVE_SCENES=mx.scenes||[];
+      liveScene=(LIVE_SCENES[0]&&LIVE_SCENES[0].name)||'电商购物';
+    }catch(e){ console.warn('[api] 场景矩阵预取失败：',e); }
+  }
+  initRunControls();                    // 真实态：14 个真实场景可选；演示态：整体禁用
+  updateBarMeta();                       // 徽标不等预览，探测一结束就更新
+  syncStepBar(phase);
+  setRunControlsEnabled(true);
+  if(ok) await previewScene(liveScene);  // 再用真实矩阵填出该场景的维度规模
+})();
+
+/* 调试钩子（供自动化验证） */
+window.__demo={
+  get phase(){return phase},
+  lit:()=>litCount, paths:()=>doneDims,
+  treeRows:()=>document.querySelectorAll('.trow').length,
+  r5vals:()=>R5I.map(e=>fmtVal(e)),
+};
+window.__api={
+  get mode(){return API.state.mode},
+  get live(){return !!API.live},
+  get agentId(){return apiAgentId},
+  get runId(){return apiRunId},
+  get scene(){return liveScene},
+  agentProfile:()=>apiAgentProfile,
+  slots:()=>DEMO.upload.slots.map(s=>({id:s.id,label:s.label,hint:s.hint,accept:s.accept,fallback:s.fallback})),
+  ghosts:()=>GHOSTS.slice(),
+  sourceTags:()=>({
+    r3:(document.getElementById('r3-src')||{}).textContent||'',
+    r4:(document.getElementById('r4-src')||{}).textContent||'',
+    r5:(document.getElementById('r5-src')||{}).textContent||'',
+    r6:(document.getElementById('r6-src')||{}).textContent||'',
+  }),
+  srcTips:()=>({
+    r3:(document.getElementById('r3-src')||{}).title||'',
+    r4:(document.getElementById('r4-src')||{}).title||'',
+  }),
+  genSizing:()=>{
+    const el=genConsoleEl();
+    let stored=null; try{ stored=localStorage.getItem(GEN_W_KEY) }catch(e){}
+    const r=genWidthRange();
+    return {
+      inline:(el&&el.style.width)||'', stored, manual:genManual,
+      min:r.min, max:r.max, cap:GEN_W_MAX, treeMin:GEN_TREE_MIN, splitW:GEN_SPLIT_W,
+      reserve:GEN_TREE_MIN+GEN_SPLIT_W,        // 必须等于 CSS calc(100% - <reserve>px) 里的数
+      splitter:!!document.getElementById('r3-split'),
+      qTitle:((document.querySelector('#gen-body .q')||{}).title)||'',
+    };
+  },
+  sceneMeta:()=>((document.getElementById('run-scene-meta')||{}).textContent||''),
+  runParams:()=>{
+    const sel=document.getElementById('run-scene');
+    return {
+      scene:selectedScene(), tasks:runTasks(), variants:runVariants(),
+      sceneDisabled:!!(sel&&sel.disabled), options:sel?sel.options.length:0,
+    };
+  },
+  view:()=>MODEL,
+  matrixCells:()=>document.querySelectorAll('#matrix .mx-cell').length,
+  litCells:()=>document.querySelectorAll('#matrix .mx-cell.t1,#matrix .mx-cell.t2,#matrix .mx-cell.t3').length,
+  stepBar:()=>({
+    1:(document.getElementById('mp-step1-status')||{}).textContent,
+    2:(document.getElementById('mp-step2-status')||{}).textContent,
+    3:(document.getElementById('mp-step3-status')||{}).textContent,
+    4:(document.getElementById('mp-step4-status')||{}).textContent,
+  }),
+};
+</script>
+</body>
+</html>

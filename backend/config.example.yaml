@@ -1,0 +1,46 @@
+# ============================================================================
+#  后端 LLM 配置 —— step1 数据集生成用它跑 planner / generator / verifier
+#
+#  放哪里（三选一，文件名决定优先级）：
+#      backend/config.yaml   ← 优先级最高
+#      backend/config.yml
+#      backend/config.json   ← 优先级最低
+#  也可以一个都不建：这时 step1 会用**你在 r1 上传的智能体配置文件**里声明的
+#  api / key / model 去调模型（前端传什么就用什么，见 api_agent.llm_declared）；
+#  连智能体配置里也没有 → 走内置的确定性 mock（开箱可跑，但数据不是真 LLM 产出）。
+#
+#  优先级：环境变量 LLM_* > 本文件 > 前端上传的智能体配置 > mock
+#
+#  生效的是哪个文件，看两处：
+#      · 启动横幅的「LLM 配置」一行
+#      · GET /api/health 的 llm_config_source
+#
+#  格式：扁平 "key: value"（与智能体配置文件同一套解析规则，见 backend/simplecfg.py）
+#        · "#" 之后是注释；字符串加不加引号都行；[a, b] 是数组
+#        · 不支持嵌套层级写法（那是 JSON 版才有的兼容）
+#        · 文件带 UTF-8 BOM 也没问题（记事本保存的 yaml 会带）
+#
+#  环境变量优先于本文件：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_TIMEOUT_S
+# ============================================================================
+
+api: https://api.openai.com/v1      # 也接受 base_url / api_url / endpoint；末尾缺 /v1 会自动补
+key: sk-REPLACE-WITH-YOUR-KEY       # 也接受 api_key / apikey；页面与日志里只会出现掩码
+model: gpt-4o-mini                  # 也接受 model_name / model_id
+
+timeout: 300                        # 单次 LLM 调用超时（秒），默认 300
+                                    # 推理模型（qwen3.8-max 等）单次 verifier 调用实测要 ~245s，
+                                    # 调小了会让该步超时→降级 mock（页面标「部分 mock」）
+temperature: 0.7                    # 默认 0.7
+fallback_to_mock: true              # true：某步调用失败时降级 mock 并把整轮跑完；false：整轮判失败
+
+# ---- 常见写法示例 ----
+# 本机你的那个 OpenAI 兼容网关：
+#   api: http://127.0.0.1:5000/v1
+#   key: <佛门Key>
+#   model: <该网关支持的模型名>
+# 阿里云百炼（DashScope 兼容模式）：
+#   api: https://dashscope.aliyuncs.com/compatible-mode/v1
+#   model: qwen-plus
+# DeepSeek：
+#   api: https://api.deepseek.com/v1
+#   model: deepseek-chat

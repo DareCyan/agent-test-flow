@@ -1,0 +1,153 @@
+/* ============================================================
+   顶部总流程步骤条 —— 样式取自原项目 css/pipeline.css 的 .mp-step-*
+   但按 index 的紧凑栅格与青色调重新定标（图标 24px、条高 ~44px）。
+   index.html 的 r7 预留条就是为它准备的。
+   ============================================================ */
+
+.r7 {
+  height: auto !important;
+  display: flex;
+  align-items: center;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--line);
+}
+
+.mp-step-bar {
+  --accent: var(--cyan-deep);
+  --accent-soft: var(--cyan-bg);
+  --accent-soft-2: #DCF0F5;
+  --success: var(--green);
+  --success-soft: rgba(63, 169, 142, .10);
+  --danger: #E4574B;
+  --danger-soft: rgba(228, 87, 75, .10);
+  --panel-3: #FBFBFC;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 2px;
+}
+
+.mp-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.mp-step {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 6px;
+  cursor: default;
+  min-width: 0;
+}
+/* 不再用整块底色表示状态：只留图标 + 底部细线，
+   否则会出现"一个彩色按钮 + 三个灰项"的割裂感 */
+.mp-step.is-active  { background: none; }
+.mp-step.is-completed { background: none; }
+.mp-step.is-error   { background: none; }
+
+.mp-step-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  border: 2px solid var(--line);
+  transition: all .2s;
+  flex-shrink: 0;
+}
+.mp-step-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink4);
+  transition: color .2s;
+  font-variant-numeric: tabular-nums;
+}
+.mp-step.is-active .mp-step-icon    { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mp-step.is-completed .mp-step-icon { border-color: var(--success); background: var(--success); }
+.mp-step.is-error .mp-step-icon     { border-color: var(--danger); background: var(--danger); }
+.mp-step.is-active .mp-step-num,
+.mp-step.is-completed .mp-step-num,
+.mp-step.is-error .mp-step-num { color: #fff; }
+
+.mp-step-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mp-step-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink3);
+  white-space: nowrap;
+  transition: color .15s;
+}
+.mp-step-status {
+  font-size: 10.5px;
+  color: var(--ink5);
+  white-space: nowrap;
+  transition: color .15s;
+}
+/* 名称保持中性色，只让状态文字着色 —— 完成态不再整块变绿 */
+.mp-step.is-active .mp-step-name        { color: var(--accent); }
+.mp-step.is-error .mp-step-name         { color: var(--danger); }
+.mp-step.is-active .mp-step-status      { color: var(--accent); font-weight: 600; }
+.mp-step.is-completed .mp-step-status   { color: var(--success); }
+.mp-step.is-error .mp-step-status       { color: var(--danger); }
+
+/* 当前步骤用底部细线指示（替代整块高亮），与 index 的色条风格一致 */
+.mp-step::after {
+  content: '';
+  position: absolute;
+  left: 10px; right: 10px; bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background .2s;
+}
+.mp-step.is-current::after             { background: var(--line2); }
+.mp-step.is-current.is-active::after   { background: var(--accent); }
+.mp-step.is-current.is-completed::after { background: var(--success); }
+.mp-step.is-error::after               { background: var(--danger); }
+
+.mp-step-connector {
+  flex: 1;
+  height: 2px;
+  background: var(--line2);
+  border-radius: 2px;
+  min-width: 20px;
+  transition: background .3s;
+}
+.mp-step-connector.is-completed { background: var(--success); }
+
+/* 右侧：只留「数据集生成引擎」这一条无法从页面推断的信息（mock / LLM），
+   其余（后端连接状态、场景）挪进 tooltip —— 场景在 r3 树的根节点本就写着 */
+.mp-bar-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  background: #FBFBFC;
+  font-size: 10px;
+  color: var(--ink4);
+  font-family: var(--mono);
+  white-space: nowrap;
+  cursor: default;
+}
+.mp-bar-meta .dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink5);
+}
+.mp-bar-meta.live .dot { background: var(--cyan); }
+.mp-bar-meta.mock .dot,
+.mp-bar-meta.demo .dot { background: #C9A227; }
