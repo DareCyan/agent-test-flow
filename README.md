@@ -73,6 +73,8 @@ api: https://api.openai.com/v1     # 也接受 base_url / api_url / endpoint（�
 key: sk-REPLACE-WITH-YOUR-KEY      # 也接受 api_key / apikey（页面与日志只显示掩码）
 model: gpt-4o-mini                 # 也接受 model_name / model_id
 timeout: 300                       # 可选，单次调用超时秒数，默认 300
+max_tokens: 32768                  # 可选，单次回复上限，默认 32768；0 = 不带该字段
+concurrency: 4                     # 可选，generator/verifier 并发度，默认 4
 fallback_to_mock: true             # 可选，默认 true
 ```
 
@@ -81,14 +83,23 @@ fallback_to_mock: true             # 可选，默认 true
 - 全局配置文件 **一个都不建也能跑真 LLM**（走第 1 条路）；两边都没有 → 确定性 mock。
 - `config.json` 同时兼容扁平写法与旧版 `{"llm": {...}}` 嵌套写法，不用改老配置。
 - 文件带 **UTF-8 BOM** 也没问题（Windows 记事本保存的 yaml/json 会带 BOM）。
-- 环境变量：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_TIMEOUT_S`。
+- 环境变量：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_TIMEOUT_S` / `LLM_MAX_TOKENS`；
+  并发度用 `DATASET_EXT_CONCURRENCY`。
+- **只想调行为参数、不想碰模型接入**：本仓库的 `backend/config.yaml` 就是这么用的——它故意
+  不写 `api / key / model`，于是那三项仍来自你上传的智能体配置，而 `timeout / max_tokens /
+  concurrency` 由这份文件说了算（当前是 600s / 32768 / 4）。
 - **到底哪个来源生效**：看本次 run 的 `llm_source` 字段、r1 的运行日志「引擎: LLM … · 来源 …」，
   或 `GET /api/health` 的 `llm_config_source`（它只反映全局配置，不含上传的智能体配置）。
 - `fallback_to_mock: true`（默认）：某步调用失败会降级 mock、打 `[降级]` 日志并把整轮跑完，
   四个区域的标记变成 `部分 mock`；设为 `false` 则整轮判失败并写 `steps.__failed__`。
-- **超时别调小**：推理模型（qwen3.8-max 等）单次 verifier 调用实测要 **~245s**（含 3 万+ 字推理）。
-  默认已从 180s 提到 300s；调小会导致该步反复超时→降级，页面看起来「还是 mock」。同理，
-  真 LLM 下单条任务就要几分钟，`任务数` 建议先用 2~4 试水（4 条整轮约 10~15 分钟）。
+- **超时别调小**：推理模型（qwen3.8-max 等）单次 verifier 调用实测要 **~245s**（含 3 万+ 字推理），
+  慢点能到 **9 分钟**。默认已从 180s 提到 300s、本仓库配置再提到 600s；调小会导致该步反复
+  超时→降级，页面看起来「还是 mock」。同理，真 LLM 下单条任务就要几分钟，`任务数` 建议先用
+  2~4 试水（4 条整轮约 10~25 分钟）。
+- **`max_tokens` 别调太小**：上限一旦截断响应，`robust_json_parse` 抠不出 JSON → 该条重试
+  3 次 → 最后还是降级 mock，比不设上限更慢。默认 32768 只砍极端长尾。
+- **每次 run 的日志第 3 行会打印生效的「运行参数」**（并发 / 超时 / max_tokens），
+  不用猜现在是哪套值在生效。
 
 ---
 
@@ -152,6 +163,30 @@ agent-test-flow/
 
 `/api/dataset-ext/runs` + `steps{planner,generator,verifier,evaluator}` +
 `__failed__` 标记与原项目的 dataset-ext 契约逐字一致，**因此日后可以平滑接回原项目**。
+
+### 页面 URL 路由
+
+页面本身就是 step1 工作台，地址栏用 **hash 路由**记录「看的是哪个 run、聚焦第几步」：
+
+```
+http://127.0.0.1:8787/#/run/55/step/1
+                      └─ run id（data/runs/55.json）  └─ 顶部步骤条的步骤号 1..4
+```
+
+- **提交测试任务后**地址栏自动变成 `#/run/<新 id>/step/1`；跑完仍指向该 run —— 刷新、收藏、
+  发给别人打开，都能回到同一份结果（**历史 run 会被自动拉取并渲染**，不重放逐格动画）。
+- 手改地址栏或前进后退 → `hashchange`/`popstate` → 反向恢复该 run；恢复时会一并还原
+  场景下拉、引擎徽标、四个区域的来源标记，并把该 run 的 `agent_id` 记回来（「重新测试」用的还是它）。
+- 参数可省略：`#/run/55`（默认 step 1）、`#/step/3`（只看步骤）。id 非法 → 按 0 处理；
+  step 越界 → 夹到 1..4。取不到的 run 会在 r1 的 console 里给一行 `[route]` 提示，其余状态不变。
+- **步骤 2/3/4 本次仍是占位**（恒「待命」）：点它们只切换路由与 `is-current` 标记，
+  页面内容仍是 step1 工作台，并在 console 里提示"未实现（占位）"。
+- 应用自己改地址栏走 `history.replaceState`（不产生历史、不触发 `hashchange`），
+  所以不会出现"自读自写"的回环；后端接口与 `/api/*` 路径**没有改动**。
+- 失败/取消的 run 现在有**显式的 `failed` 阶段**（以前没有这个分支，phase 会一直停在
+  `executing` —— 页面看着像还在跑，`提交测试任务` 按钮还是禁用态，想重跑都点不动）：
+  步骤条标 `is-error`、r6 显示错误原因、按钮变「重新测试」可点；r3/r4/r6 里**已经产出的部分
+  仍保持可见**（`body[data-phase=failed]` 的显隐规则与 executing 一致）。
 
 ---
 
@@ -314,9 +349,13 @@ npm install jsdom --no-save --cache %TEMP%\atf-npmcache
 **已知边界**
 
 - **真 LLM 很慢**：推理模型（qwen3.8-max）单次调用实测 200~250s（planner 6.9K 字提示词、
-  verifier 6.6K 字提示词 + 3 万+ 字推理）。`task_count=4` 整轮约 **10~15 分钟**
-  （planner 1 次 → generator 4 并发 → verifier 4 并发）。想快点先把任务数设成 2；
+  verifier 6.6K 字提示词 + 3 万+ 字推理），慢点能到 **9 分钟**。`task_count=4` 整轮约
+  **10~25 分钟**（planner 1 次 → generator 4 并发 → verifier 4 并发）。想快点先把任务数设成 2；
   页面不会卡死，期间有 `任务 x/y` / `校验 x/y` 的幽灵文字与逐行点亮。
+- **「看着像卡死」但进程还活着**：一次 LLM 调用期间不产生任何进度事件（`store` 只在每条任务
+  完成时落盘 + 推 SSE），所以单条慢调用会表现为 `data/runs/{id}.json` 好几分钟不更新。
+  判断方法：`GET /api/dataset-ext/run?id=N` 看 `progress.substeps` / `verifier_completed`，
+  或看该文件 mtime；`status=running` 且计数器不动 = 仍在调用中，不是挂了。
 - **单轮/多轮探测**对推理模型可能返回「接口 200 但内容为空」（只出 `reasoning_content`）→
   该行显示 ✗ 并写明原因。这是**如实报告**（README 的约定是测不出来不许打勾），不是链路坏了；
   step1 的实际调用不受影响（长提示词下模型会正常给出 `content`）。
@@ -332,8 +371,12 @@ npm install jsdom --no-save --cache %TEMP%\atf-npmcache
   取其 `api / key / model` 做联通性实测。key 在页面、日志、接口响应里都只有掩码
   （`profile.api_key_masked`，`profile.declared` 已对 key/secret/token/password 类字段掩码），
   完整配置原文仍原样保存在本机 `uploads/` 以便复现接入过程。
-- 智能体配置里的 `api/key/model` **只用于联通性探测**，不会拿去跑数据集生成；
-  step1 的 LLM 仍来自 `backend/config.json`（或 `LLM_*` 环境变量），两者互相独立。
+- 智能体配置里的 `api/key/model` **既用于联通性探测，也作为 step1 的兜底 LLM 来源**
+  （优先级最低的可用来源，见 `api_agent.llm_declared` + `llm.load_config` 的 override 分支）：
+  只有当 `backend/config.*` 或 `LLM_*` 环境变量**没**给出 base_url/model 时，才用上传的那份。
 - 步骤条 2/3/4 本次**只有占位**（恒「待命」），无页面、无接口。
-- 并发上限 `DATASET_EXT_CONCURRENCY`（默认 4）；LLM 单次超时默认 180s。
+- 并发上限 `DATASET_EXT_CONCURRENCY`（默认 4，也可写 `concurrency` 到 `backend/config.yaml`）；
+  LLM 单次超时默认 300s（本仓库配置里是 600s）；单次回复上限 `max_tokens` 默认 32768。
+- **注意**：这几项都是**进程启动时**从配置/环境变量读的，改完要重启后端；重启会打断正在跑的
+  run（它是进程内 daemon 线程），该 run 的文件状态会停在 `running`。
 - 运行记录落在 `data/runs/*.json`，为最简 JSON 存储（无数据库）。

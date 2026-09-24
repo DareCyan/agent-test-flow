@@ -163,7 +163,12 @@ body[data-phase=evaluating] .st-evaluating,
 body[data-phase=done] .st-done,
 body[data-phase=executing] .st-eval-keep,
 body[data-phase=evaluating] .st-eval-keep,
-body[data-phase=done] .st-eval-keep{display:var(--d,block) !important}
+body[data-phase=done] .st-eval-keep,
+/* failed 也要保留「已产出的部分」：失败/取消的 run 仍有树、query、部分矩阵与 r6 里的错误说明。
+   这些元素本来就带 st-executing（失败前 phase 会停在 executing），所以按 executing 那套一起显示，
+   换到显式的 failed 态后外观与以前一致，不会整块消失。 */
+body[data-phase=failed] .st-executing,
+body[data-phase=failed] .st-eval-keep{display:var(--d,block) !important}
 
 /* ---------- 区域 1 ---------- */
 .uploads{display:flex;gap:10px;flex:none}
@@ -744,8 +749,12 @@ function renderUpload(slot){
 
 /* ================= 泛化数据集 Console（区域 3 右侧） ================= */
 let genTimer=null,genSeen=0,genStartTimer=null;
+let genList=[];                     // 后端最新一帧的完整 query 列表（每帧整体覆盖；顺序是任务序，前缀稳定）
+let genFinal=false;                 // 终态标记：已知的行播完就停，不再等新 query
+const GEN_IDLE_MS=400;              // 追平已知内容后，等新 query 的轮询间隔（ms）
+
 function startGen(){
-  stopGen();
+  stopGen(); genFinal=false;
   const c=document.getElementById('gen-body');
   c.innerHTML='';
   genSeen=0;
@@ -760,23 +769,52 @@ function startGen(){
   })();
 }
 function stopGen(){clearTimeout(genTimer);clearTimeout(genStartTimer);genTimer=null;genStartTimer=null}
+/* 终态（done / failed / cancelled）：别把动画掐在半截，把已知的行播完再停 */
+function finishGen(){genFinal=true}
 
-/* 真实态：右侧 console 逐条回放后端生成出来的 query（任务指令 + 欠指定变体） */
+/* 真实态：右侧 console 逐条回放后端生成出来的 query（任务指令 + 欠指定变体）。
+   后端每完成一条任务就推一帧，所以这里必须**持续追平**新内容：
+   旧实现只在第一帧启动一次 → 标题计数一直涨、行数却冻结在首帧（计数与行数对不上）。
+   现在 genList 每帧被最新列表覆盖（前缀稳定），循环按 genSeen 继续追加未播出的尾部。 */
 function startLiveGen(list){
-  stopGen();
+  stopGen(); genFinal=false;
   const c=document.getElementById('gen-body');
-  c.innerHTML=''; genSeen=0;
-  const total=(list||[]).length;
+  c.innerHTML=''; genSeen=0; genList=(list||[]).slice();
+  if(!genList.length) return;
   (function add(){
-    if(genSeen>=total) return;
-    const item=list[genSeen]; genSeen++;
+    if(genSeen<genList.length){
+      const item=genList[genSeen]; genSeen++;
+      const d=document.createElement('div'); d.className='q';
+      d.innerHTML=`<em>${String(item.n||genSeen).padStart(3,'0')}</em>${escHtml(item.text||'')}`;
+      d.title=item.text||'';
+      c.appendChild(d);
+      c.scrollTop=c.scrollHeight;
+      genTimer=setTimeout(add,T.genStepMin+Math.random()*(T.genStepMax-T.genStepMin));
+    }else if(genFinal){
+      genTimer=null;                                 // 终态且已播完 → 收工，不留轮询
+    }else{
+      genTimer=setTimeout(add,GEN_IDLE_MS);          // 追平了：继续等下一帧，别停
+    }
+  })();
+}
+/* 新一帧到达：只换列表，不重播已显示的行；动画循环自然会把新增的尾部接着播出来 */
+function extendLiveGen(list){
+  if(!list||!list.length) return;
+  genList=list.slice();
+}
+/* 按 URL 恢复历史 run 用：query 一次到位，不逐条回放（历史结果没必要再看一遍生成过程） */
+function renderGenInstant(list){
+  stopGen();
+  const c=document.getElementById('gen-body'); if(!c) return;
+  c.innerHTML=''; genSeen=0; genFinal=true; genList=(list||[]).slice();
+  genList.forEach((item,i)=>{
     const d=document.createElement('div'); d.className='q';
-    d.innerHTML=`<em>${String(item.n||genSeen).padStart(3,'0')}</em>${escHtml(item.text||'')}`;
+    d.innerHTML=`<em>${String(item.n||i+1).padStart(3,'0')}</em>${escHtml(item.text||'')}`;
     d.title=item.text||'';
     c.appendChild(d);
-    c.scrollTop=c.scrollHeight;
-    genTimer=setTimeout(add,T.genStepMin+Math.random()*(T.genStepMax-T.genStepMin));
-  })();
+  });
+  genSeen=genList.length;
+  c.scrollTop=c.scrollHeight;
 }
 function escHtml(s){
   return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -909,10 +947,16 @@ function setPhase(p){
   }else if(p==='done'){
     S('r2-status','已完成','st-dark');S('r3-status','已覆盖 '+doneDims+'/'+DIMS.length,'st-dark');S('r4-status','覆盖 '+Math.round(100*litCount/Math.max(1,TOTAL_CELLS))+'%','st-dark');S('r5-status','完成','st-dark');S('r6-status','已生成','st-dark');
     B('btn-run','重新测试','btn-outline');
+  }else if(p==='failed'){
+    /* 终态之一：失败/取消（含"按 URL 恢复到一个 cancelled 的 run"）。
+       以前没有这个分支，失败后 phase 一直停在 executing —— 页面看着像还在跑，
+       而且 btn-run 还是禁用态，想重跑都点不动。 */
+    S('r2-status','已失败','st-dark');S('r3-status','已覆盖 '+doneDims+'/'+DIMS.length,'st-dark');S('r4-status','覆盖 '+Math.round(100*litCount/Math.max(1,TOTAL_CELLS))+'%','st-dark');S('r5-status','未完成','st-dark');S('r6-status','已中断','st-dark');
+    B('btn-run','重新测试','btn-outline');
   }
   syncStepBar(p);
-  /* 运行中不许改参数，避免显示的树/矩阵与提交时的参数不一致 */
-  setRunControlsEnabled(p==='idle'||p==='ready'||p==='done');
+  /* 运行中不许改参数，避免显示的树/矩阵与提交时的参数不一致；终态（含失败）要能改回来重跑 */
+  setRunControlsEnabled(p==='idle'||p==='ready'||p==='done'||p==='failed');
 }
 
 /* ================= 顶部步骤条同步（index 整体 = step1） ================= */
@@ -930,14 +974,15 @@ function updateStepBar(n,status){
   }
 }
 function syncStepBar(p){
-  if(p==='done') updateStepBar(1,'completed');
-  else if(p==='failed') updateStepBar(1,'failed');
-  else if(p==='modeling'||p==='executing'||p==='evaluating') updateStepBar(1,'running');
-  else{
-    updateStepBar(1,'idle');
-    const s1=document.querySelector('.mp-step[data-step="1"]'); if(s1) s1.classList.add('is-current');
-  }
+  const s1=(p==='done')?'completed':(p==='failed')?'failed'
+    :(p==='modeling'||p==='executing'||p==='evaluating')?'running':'idle';
+  updateStepBar(1,s1);
   for(let n=2;n<=4;n++) updateStepBar(n,'idle');   // 2/3/4 本次不实现，恒为「待命」
+  /* is-current 跟「当前聚焦的步骤」（= 路由里的 step）走；
+     旧实现恒加在 step1 上且从不清除，路由化后必须由 currentStep 决定 */
+  document.querySelectorAll('.mp-step').forEach(el=>{
+    el.classList.toggle('is-current',Number(el.dataset.step)===currentStep);
+  });
 }
 /* 顶部右侧徽标：只显示「数据集生成引擎」（唯一无法从页面推断、且会影响数字解读的信息），
    后端连接状态与场景放到 tooltip —— 场景在 r3 树的根节点已经写着。
@@ -1163,7 +1208,7 @@ async function previewScene(name){
     const dims=((v.tree||{}).dims||[]).length;
     const total=((v.matrix||{}).total)||0;
     if(meta) meta.textContent=`${cats} 类别 · ${dims} 维度 · ${total} 格`;
-    if(phase==='done') resetForSceneChange();
+    if(phase==='done'||phase==='failed') resetForSceneChange();
   }catch(e){ console.warn('[api] 场景预览失败：',e); }
 }
 function resetForSceneChange(){
@@ -1324,7 +1369,7 @@ async function connect(){
 }
 
 async function run(){
-  if(phase!=='ready'&&phase!=='done')return;
+  if(phase!=='ready'&&phase!=='done'&&phase!=='failed')return;
   if(!API.live){ updateBarMeta(); return runDemo(); }
   const tk=++runToken;
   resetVisuals();
@@ -1342,6 +1387,7 @@ async function run(){
     });
     if(!res.ok) throw new Error(res.error||'step1 启动失败');
     apiRunId=res.id;
+    writeRoute(apiRunId,currentStep);          // 地址栏反映本次 run：#/run/<id>/step/<n>
     if(apiStream&&apiStream.stop) apiStream.stop();
     apiStream=API.stream(res.id, v=>onView(v,tk));
   }catch(e){
@@ -1375,7 +1421,7 @@ async function pump(){
 
 async function renderLive(v){
   const ph=v.phase;
-  if(ph==='failed'){ showError(v.error||'step1 执行失败'); return; }
+  if(ph==='failed'){ finishGen(); if(phase!=='failed') setPhase('failed'); showError(v.error||'step1 执行失败'); return; }
   if(ph==='modeling'){ if(phase!=='modeling') setPhase('modeling'); return; }
   if(ph!=='executing'&&ph!=='evaluating'&&ph!=='done') return;
 
@@ -1384,6 +1430,7 @@ async function renderLive(v){
     startGhosts();
   }
   if(!genStarted&&(v.queries||[]).length){ genStarted=true; startLiveGen(v.queries); }
+  else if(genStarted) extendLiveGen(v.queries);       // 后续帧接着追加，别再冻结在首帧
   await lightProgress(v);
 
   if(ph==='evaluating'){
@@ -1397,13 +1444,15 @@ async function renderLive(v){
     if(wait>0) await sleep(wait);
     buildR6();
     finalizeR5();
-    stopGhosts(); stopGen();
+    stopGhosts(); finishGen();
     setPhase('done');
   }
 }
 
-/* 按后端给定的「已覆盖维度 + 真实档位」逐格点亮树与矩阵 */
-async function lightProgress(v){
+/* 按后端给定的「已覆盖维度 + 真实档位」逐格点亮树与矩阵。
+   instant=true：不等动画（按 URL 恢复历史 run 时用，否则 14 个维度要重放近半分钟） */
+async function lightProgress(v,instant){
+  const step=async ms=>{ if(!instant) await sleep(ms); };
   const rows=(v.matrix||{}).rows||[];
   if(!rows.length) return;
   const dimRow=id=>document.querySelector('.trow[data-dim="'+id+'"][data-role="dim"]');
@@ -1416,13 +1465,13 @@ async function lightProgress(v){
       setEdge('e-root','run');
       const rr=rootRow(); if(rr){ rr.classList.remove('done'); rr.classList.add('run'); }
       catRows().forEach(el=>{ el.classList.remove('done'); el.classList.add('run'); });
-      await sleep(jit(T.rowStep));
+      await step(jit(T.rowStep));
     }
     setEdge('e-'+r.dim_id,'run');
     const dr=dimRow(r.dim_id);
     if(dr){ dr.classList.remove('done'); dr.classList.add('run'); }
     document.querySelectorAll('.mx-cell[data-dim="'+r.dim_id+'"]').forEach(c=>c.classList.add('ra'));
-    await sleep(jit(T.rowStep));
+    await step(jit(T.rowStep));
 
     const caps=FLAT.filter(c=>c!==MISS);
     const order=DEMO.timing.shuffleCells?[...caps].sort(()=>Math.random()-0.5):caps;
@@ -1436,13 +1485,13 @@ async function lightProgress(v){
       if(cell&&tier>0){ cell.classList.add('t'+tier,'now'); litPairs.add(r.dim_id+':'+ci); }
       litCount=litPairs.size; curFrac=(ci+1)/FLAT.length;
       updateCounts();
-      await sleep(jit(T.cellStep));
+      await step(jit(T.cellStep));
     }
     if(prev) prev.classList.remove('now');
 
     for(const el of document.querySelectorAll('.trow[data-dim="'+r.dim_id+'"][data-role="leaf"]')){
       el.classList.add('run');
-      await sleep(jit(T.leafStep));
+      await step(jit(T.leafStep));
     }
     document.querySelectorAll('.trow[data-dim="'+r.dim_id+'"]').forEach(el=>{
       el.classList.remove('run'); el.classList.add('done');
@@ -1451,7 +1500,7 @@ async function lightProgress(v){
     setEdge('e-'+r.dim_id,'done');
     litDims.add(r.dim_id); doneDims=litDims.size; curFrac=0;
     updateCounts();
-    await sleep(jit(T.gap));
+    await step(jit(T.gap));
   }
   rows.forEach(r=>{ if(r.active) litDims.add(r.dim_id); });
   doneDims=litDims.size;
@@ -1471,9 +1520,145 @@ function showError(msg){
   updateStepBar(1,'failed');
 }
 
+/* ================= hash 路由：#/run/<id>/step/<n> =================
+   目的：刷新 / 分享 / 前进后退都能回到同一个 run 与同一个步骤；run 跑完地址栏仍指向它。
+   写法：应用自己改地址栏用 replaceState（不产生历史、不触发 hashchange，天然避免自读自写）；
+        用户手改地址栏或前进后退 → hashchange/popstate → 反向把该 run 恢复出来。
+   注意：步骤 2/3/4 本次仍是占位（恒「待命」）；路由支持它们，但页面只有 step1 工作台。 */
+let currentStep=1;            // 顶部步骤条当前聚焦的步骤（1..4，来自路由）
+let routeWriting=false;       // 应用正在写地址栏 → 忽略随之而来的 hashchange
+let routeRestoring=false;     // 正在按 URL 恢复 run → 同样忽略
+const TERMINAL=['completed','failed','cancelled'];
+const STATUS_CN={completed:'已完成',failed:'失败',cancelled:'已取消',running:'运行中'};
+
+function parseRoute(hash){
+  const parts=String(hash==null?location.hash:hash).replace(/^#/,'').split('/').filter(Boolean);
+  let runId=0, step=0;
+  for(let i=0;i<parts.length;i++){
+    if(parts[i]==='run') runId=parseInt(parts[++i],10)||0;
+    else if(parts[i]==='step') step=parseInt(parts[++i],10)||0;
+  }
+  return {runId:runId, step:step?Math.min(4,Math.max(1,step)):1};
+}
+function routeText(runId,step){
+  return '#/'+(runId?('run/'+runId+'/'):'')+'step/'+(step||currentStep||1);
+}
+function writeRoute(runId,step){
+  const t=routeText(runId,step);
+  if(location.hash===t) return;
+  routeWriting=true;
+  try{ history.replaceState(null,'',location.pathname+location.search+t); }
+  catch(e){ location.hash=t; }                    // 极端兼容：退化成直接改 hash
+  routeWriting=false;
+}
+function stepNameOf(n){
+  const el=document.querySelector('.mp-step[data-step="'+n+'"] .mp-step-name');
+  return ((el&&el.textContent)||'').trim();
+}
+function setStep(n,quiet){
+  const v=Math.min(4,Math.max(1,parseInt(n,10)||1));
+  const changed=(v!==currentStep);
+  currentStep=v;
+  syncStepBar(phase);
+  if(changed&&!quiet&&v!==1)
+    routeNote('步骤 '+v+'「'+stepNameOf(v)+'」本次未实现（占位），页面仍是 step1 工作台');
+  return changed;
+}
+/* 点步骤条 → 只改路由里的 step；页面内容不切（2/3/4 没有页面） */
+function onStepClick(n){ setStep(n); writeRoute(apiRunId,currentStep); }
+
+/* 路由相关的提示行：落在 r1 的 console 里（该面板本来就是「过程日志」） */
+function routeNote(msg){
+  const body=document.getElementById('console-body'); if(!body) return;
+  const el=document.createElement('div'); el.className='log-line route-line';
+  el.innerHTML='<span class="ts">[route]</span>'+escHtml(msg);
+  body.appendChild(el); body.scrollTop=body.scrollHeight;
+}
+
+/* 读路由：step 同步到步骤条；带 run id 就把它恢复出来 */
+async function applyRoute(){
+  const r=parseRoute();
+  if(r.step!==currentStep) setStep(r.step,true);
+  if(!r.runId) return;
+  if(!(API&&API.live)) return;                        // 演示模式没有可恢复的 run
+  if(r.runId===apiRunId&&phase!=='idle') return;       // 就是这个 run，别重来
+  await openRun(r.runId);
+}
+function onRouteChanged(){
+  if(routeWriting||routeRestoring) return;
+  applyRoute();
+}
+window.addEventListener('hashchange',onRouteChanged);
+window.addEventListener('popstate',onRouteChanged);
+
+/* 按 URL 恢复某个 run：
+   · 历史 run（completed/failed/cancelled）→ 一次性铺好，不重放逐格动画；
+   · 还在跑的 run → 接上既有 SSE/轮询管线，继续逐格点亮。 */
+async function openRun(rid){
+  const tk=++runToken;
+  if(apiStream&&apiStream.stop){ apiStream.stop(); apiStream=null; }
+  routeRestoring=true;
+  try{
+    let v=null;
+    try{ v=await API.summary(rid); }catch(e){ v=null; }
+    if(!alive(tk)) return;
+    if(!v||!v.ok){ routeNote('URL 里的 run #'+rid+' 取不到（'+((v&&v.error)||'后端未连接')+'）'); return; }
+
+    apiRunId=rid;
+    if(v.agent_id) apiAgentId=v.agent_id;              // 恢复后「重新测试」仍用同一个智能体
+    liveScene=v.scene||liveScene;
+    SCENE=liveScene;
+    const sel=document.getElementById('run-scene');
+    if(sel&&liveScene&&[...sel.options].some(o=>o.value===liveScene)) sel.value=liveScene;
+    const meta=document.getElementById('run-scene-meta');
+    if(meta) meta.textContent=((v.tree||{}).categories||[]).length+' 类别 · '
+      +((v.tree||{}).dims||[]).length+' 维度 · '+(((v.matrix||{}).total)||0)+' 格';
+    if(v.agent_id&&phase!=='ready'){
+      const rs=document.getElementById('r1-status');
+      if(rs){ rs.textContent='Agent Ready'; rs.className='p-status st-green'; }
+      const bc=document.getElementById('btn-connect');
+      if(bc){ bc.textContent='已接入'; bc.className='btn btn-disabled'; bc.style.pointerEvents='none'; }
+    }
+
+    MODEL=null; TREE_CATS=null; R5_ITEMS=null; R6_ROWS=null;
+    litPairs=new Set(); litDims=new Set();
+    resetVisuals();
+
+    if(v.status==='running'){
+      liveBuilt=false; genStarted=false; pendingView=null;
+      setPhase('modeling');
+      apiStream=API.stream(rid, x=>onView(x,tk));
+      routeNote('已接上正在运行的 run #'+rid+'（'+(v.scene||'')+'），继续按进度点亮');
+      return;
+    }
+
+    liveBuilt=true; genStarted=true; pendingView=null;
+    applyModel(v);
+    buildTree(); buildMatrix(); buildR5(); buildR6(); updateCounts();
+    await lightProgress(v,true);                       // 历史 run：直接点亮，不等动画
+    if(!alive(tk)) return;
+    renderGenInstant(v.queries);
+    if(v.status==='completed'){
+      setPhase('evaluating'); buildR6(); finalizeR5(); setPhase('done');
+    }else{
+      setPhase('failed'); showError(v.error||('该 run 状态：'+v.status));
+    }
+    routeNote('已按 URL 恢复 run #'+rid+' · '+(v.scene||'')+' · '+(STATUS_CN[v.status]||v.status));
+  }finally{
+    routeRestoring=false;
+  }
+}
+
 /* ================= 事件与初始化 ================= */
 document.getElementById('btn-connect').addEventListener('click',connect);
-document.getElementById('btn-run').addEventListener('click',()=>{if(phase==='ready'||phase==='done')run()});
+/* 步骤条可点：只切换路由里的 step（2/3/4 是占位，点了会在 console 里提示） */
+document.querySelectorAll('.mp-step').forEach(el=>{
+  const n=Number(el.dataset.step);
+  el.style.cursor='pointer';
+  el.title='步骤 '+n+'：'+(n===1?'数据集生成（本次实现）':'占位，未实现');
+  el.addEventListener('click',()=>onStepClick(n));
+});
+document.getElementById('btn-run').addEventListener('click',()=>{if(phase==='ready'||phase==='done'||phase==='failed')run()});
 applyConfig(); buildUploads(); buildTree(); buildMatrix(); buildR5(); buildR6(); updateCounts(); initGenSplit(); setPhase('idle');
 
 /* 传输层初始化：探测后端 → 预取场景矩阵（用于 planner 维度注入与场景选择） */
@@ -1492,6 +1677,7 @@ applyConfig(); buildUploads(); buildTree(); buildMatrix(); buildR5(); buildR6();
   syncStepBar(phase);
   setRunControlsEnabled(true);
   if(ok) await previewScene(liveScene);  // 再用真实矩阵填出该场景的维度规模
+  if(ok) await applyRoute();             // 地址栏带着 run id 打开/刷新 → 恢复该 run
 })();
 
 /* 调试钩子（供自动化验证） */
@@ -1506,6 +1692,9 @@ window.__api={
   get live(){return !!API.live},
   get agentId(){return apiAgentId},
   get runId(){return apiRunId},
+  get step(){return currentStep},
+  route:()=>({runId:apiRunId, step:currentStep, hash:location.hash,
+              parsed:parseRoute(), text:routeText(apiRunId,currentStep)}),
   get scene(){return liveScene},
   agentProfile:()=>apiAgentProfile,
   slots:()=>DEMO.upload.slots.map(s=>({id:s.id,label:s.label,hint:s.hint,accept:s.accept,fallback:s.fallback})),
