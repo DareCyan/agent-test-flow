@@ -1,5 +1,6 @@
 # 运行期产物
 data/runs/
+data/install_runs/
 data/agents.json
 uploads/
 build/
@@ -10,10 +11,11 @@ backend/config.yaml
 backend/config.yml
 
 # examples/agent/ 只提交模板文件：
-# 填好的示例配置（可能带真实 key）与示例安装包都只留在本地，不进仓库
+# 填好的示例配置（可能带真实 key）、示例安装说明（含机器地址/私钥路径）与示例安装包都只留在本地，不进仓库
 examples/agent/*
 !examples/agent/agent-config.template.yaml
 !examples/agent/agent-config.template.json
+!examples/agent/install.template.json
 
 # Python
 __pycache__/

@@ -115,6 +115,10 @@ agent-test-flow/
 │  ├─ api_agent.py               r1：接配置 + 真实探测（单轮/多轮/联通性/协议）+ agent profile
 │  ├─ api_dataset.py             step1 接口 + summary 聚合（唯一聚合点）+ 场景预览
 │  ├─ step1_runner.py            四步编排：并发 / 重试 3 次 / 逐条进度 / 降级
+│  ├─ install_doc.py             安装说明文件（install.json）：格式规范 + 严格校验 + 变量展开 + 跳过白名单
+│  ├─ install_ai.py              安装说明的 AI 解读（只产出描述性内容；模型给的命令一律丢弃）
+│  ├─ ssh_client.py              ssh/scp 传输层（只支持密钥；BatchMode，绝不交互）
+│  ├─ api_install.py             step3「安装执行」：预检 → 计划 → 传输 → 逐步执行（默认 dry-run）
 │  ├─ llm.py                     OpenAI 兼容 chat + 稳健 JSON 解析 + 配置读取（json/yaml）
 │  ├─ simplecfg.py               JSON / 扁平 YAML 共用解析（含 BOM 容错）
 │  ├─ mockgen.py                 确定性 mock 生成器（无 LLM 时同构产出）
@@ -135,12 +139,15 @@ agent-test-flow/
 │  ├─ extract_matrix.py          从 scene-matrix.js 抽矩阵（一次性，可重跑）
 │  └─ extract_inline.py          抽内联脚本供 node --check 语法校验
 ├─ examples/                     示例文件（说明见 examples/README.md）
-│  ├─ agent/agent-config.template.yaml / .json     配置文件模板（**仓库里只提交这两个**）
+│  ├─ agent/agent-config.template.yaml / .json     配置文件模板（**仓库里只提交这几个模板**）
+│  ├─ agent/install.template.json                  安装说明文件模板（install.json）
 │  ├─ agent/shopping-agent.yaml / .json            ← 本地成品示例（不进仓库：可能含真实 key）
+│  ├─ agent/shopping-agent-install.json            ← 本地可跑示例（含机器地址/私钥路径，不进仓库）
 │  ├─ agent/shopping-agent-v2.zip                  ← 本地示例安装包（不进仓库）
 │  └─ briefs/01-电商购物.md / 02-本地生活.md / 03-出行服务.md
 ├─ data/runs/*.json              step1 运行记录（不进仓库）
-└─ uploads/                      上传物（不进仓库；配置文件存文本，zip 只存文件名/大小）
+├─ data/install_runs/*.json      step3 安装执行记录（不进仓库）
+└─ uploads/                      上传物（不进仓库；配置文件/安装说明存文本，zip 只存文件名/大小）
 ```
 
 ---
@@ -160,6 +167,12 @@ agent-test-flow/
 | GET | `/api/dataset-ext/run/summary?id=` | **前端视图模型**：树 / 矩阵 / 6 项指标 / 参数明细 / query / 进度 / `data_source`（`llm` / `mock` / `mixed` / `preview`） |
 | GET | `/api/dataset-ext/stream?id=` | step1 进度 SSE（`snapshot` / `status` / `step` / `progress` / `log`） |
 | POST | `/api/dataset-ext/runs/cancel` | 停止某次运行 `{id}` |
+| POST | `/api/install/plan` | **只看安装计划**（不连机器、不执行）`{agent_id?, install_content?}` → 展开后的命令 + 每项校验的启用/跳过原因 |
+| POST | `/api/install/runs` | 启动 step3 安装执行：`{agent_id?, install_content?, package_b64?, package_name?, dry_run?}` → `{id, dry_run}`。真执行由文件的 `install.execute` 决定；`dry_run:false` 只能**收紧**不能放开 |
+| GET | `/api/install/run?id=` | 某次安装执行的完整记录（计划 / 预检 / 传输 / 逐步结果 / 日志 / `result`） |
+| GET | `/api/install/latest?agent_id=` | 该智能体最近一次安装执行（前端打开 step3 时先看它） |
+| GET | `/api/install/stream?agent_id=` | 安装执行进度 SSE（事件名 `install`，频道 `<agent_id>#install`，与 r1 接入互不干扰） |
+| POST | `/api/install/runs/cancel` | 请求停止某次安装执行 `{id}` |
 
 `/api/dataset-ext/runs` + `steps{planner,generator,verifier,evaluator}` +
 `__failed__` 标记与原项目的 dataset-ext 契约逐字一致，**因此日后可以平滑接回原项目**。
@@ -181,12 +194,86 @@ http://127.0.0.1:8787/#/run/55/step/1
   step 越界 → 夹到 1..4。取不到的 run 会在 r1 的 console 里给一行 `[route]` 提示，其余状态不变。
 - **步骤 2/3/4 本次仍是占位**（恒「待命」）：点它们只切换路由与 `is-current` 标记，
   页面内容仍是 step1 工作台，并在 console 里提示"未实现（占位）"。
+- **例外：step3 已经不是占位了**。点步骤条第 3 步会打开「安装执行」独立视图（见上文
+  「安装说明文件」）；此时路由里的 id 是**安装执行 run 的 id**（`data/install_runs/<id>.json`），
+  不是数据集 run —— `#/run/12/step/3` 指向第 12 次安装执行，刷新/分享可回到同一次。
+  没接入智能体时它是空态提示，不会发任何安装请求。
 - 应用自己改地址栏走 `history.replaceState`（不产生历史、不触发 `hashchange`），
   所以不会出现"自读自写"的回环；后端接口与 `/api/*` 路径**没有改动**。
 - 失败/取消的 run 现在有**显式的 `failed` 阶段**（以前没有这个分支，phase 会一直停在
   `executing` —— 页面看着像还在跑，`提交测试任务` 按钮还是禁用态，想重跑都点不动）：
   步骤条标 `is-error`、r6 显示错误原因、按钮变「重新测试」可点；r3/r4/r6 里**已经产出的部分
   仍保持可见**（`body[data-phase=failed]` 的显隐规则与 executing 一致）。
+
+### 安装说明文件（`install.json`）
+
+一个文件同时装下「**机器 SSH 信息**」和「**安装步骤**」：r1 接入时上传 → 后端严格校验 +
+AI 解读 + SSH 预检；step3「安装执行」真装机时复用同一份解析。格式由
+`backend/install_doc.py` 实现（纯解析，不碰网络，故可单测），模板见
+`examples/agent/install.template.json`。
+
+**三条硬约束**（刻意如此，别改）：
+
+1. **可执行的命令只有文件里明写的 `install.steps[].run`**。AI 只解读 `notes`/`desc` 并规范化
+   顺序，**绝不生成命令** —— 免得模型自由发挥去改机器。
+2. **默认 dry-run**：只有 `install.execute = true` 才真执行。接口的 `dry_run` 参数只能**进一步
+   收紧**（强制预览），不能把默认 dry-run 的文档变成真执行。
+3. **跳过有两种粒度，且都留痕**：全局 `skip_checks` 白名单 + 步骤级 `steps[].skip`。
+   两者都会把「跳过原因」写进执行报告（"为什么没校验/没执行"必须可追溯，不许静默跳过）。
+
+**格式**：JSON（只收 JSON）。要表达「步骤列表 + 每步多字段」，而仓库里的 `simplecfg` 只支持
+扁平 `k: v`（不引 PyYAML 是既定约束），YAML 表达不了嵌套步骤；校验器遇到非 `{` 开头的文本会
+直接报错并提示改用模板。
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `schema_version` | ✅ | 整数，当前 `1`；改字段结构时 +1 |
+| `agent.name` / `agent.version` | | 智能体名/版本；`name` 也用于 `workspace`、`remote_dir` 的默认值 |
+| `package.name` | ✅ | 安装包文件名（`{zip_name}` 取它） |
+| `package.source` | | `local`（默认）本机 zip，装时 scp 过去 / `url` 目标机器自己下载 / `upload` 用 r1 上传的那个 |
+| `package.path` | `local` 必填 | 本机上的 .zip 路径（相对路径按仓库根解析） |
+| `package.url` | `url` 必填 | http(s) 地址（目标机器要能直接下载） |
+| `package.sha256` | | 64 位十六进制；**填了才可能启用** `zip_sha256` 校验 |
+| `package.keep_remote` | | 默认 false：装完删远端临时目录 |
+| `target.host` / `target.user` | ✅ | SSH 地址与登录用户 |
+| `target.port` | | 默认 22 |
+| `target.auth.method` | | 只支持 `key`（Windows 上密码认证没有稳定的非交互做法，写别的直接报错） |
+| `target.auth.private_key` | ✅ | 本机私钥路径 |
+| `target.auth.passphrase` | | 有值会 warn：本工具**不代持口令**，请先 `ssh-add` 到 ssh-agent；接口/日志里只出现掩码 |
+| `target.os` | | `linux` / `windows` / `auto`（默认 auto） |
+| `target.workspace` | | 缺省 `/opt/<agent.name>` |
+| `target.sudo` | | 默认 false；为 true 时每步命令与 check 前加 `sudo -n` |
+| `install.remote_dir` | | 缺省 `/tmp/{agent}-install`（自身也支持占位符，但不得引用 `{remote_dir}`） |
+| `install.execute` | | **默认 false（dry-run）**；true 才真执行 |
+| `install.steps[]` | ✅ | 非空数组；每步 `id`（必填、唯一）/ `desc` / `run`（必填，唯一可执行来源）/ `check`（装后验证命令）/ `timeout_s`（默认 180，上限 3600）/ `skip` / `sudo` |
+| `checks.<id>` | | `true`/`false`，或 `disk_space` 给容量（`1G`）；未声明 = 开启 |
+| `skip_checks` | | 白名单数组：`ssh_reachable` / `remote_os` / `disk_space` / `zip_sha256` / `post_health` |
+| `notes` | | 自由文本，给 AI 解读用（注意事项、前置条件、机器上的特殊约定） |
+
+占位符（命令里可用，未知名字会被判为错误，避免 `{wrokspace}` 这种拼错静默生效）：
+`{agent} {version} {zip} {zip_name} {zip_sha256} {zip_url} {remote_dir} {workspace} {host} {port} {user}`。
+
+**校验行为**：`{ok, errors, warnings, doc}`。`errors` 带字段路径（如 `target.auth.private_key`、
+`install.steps[2].run`、`skip_checks[0]`）并让整份文件判失败；`warnings` 不拦但会显示
+（未知字段、私钥/zip 在本机找不到、`workspace` 走了默认值、写了 passphrase、`checks` 里的
+未知项）。`_` 开头的键是注释（模板既有约定），静默忽略。**`skip_checks` 写错名字是 error
+而不是 warning** —— 拼错的"跳过"如果静默生效，等于悄悄少校验一项。
+
+`install.template.json` 里给了可照抄的最小结构；`examples/agent/shopping-agent-install.json`
+（本地示例、不进仓库）指向本机的 zip 与私钥，可直接拿来跑一遍 dry-run。
+
+**流程落在哪**：r1「智能体接入」的第三个槽位上传本文件（**可选**，不选就不带），随后接入流程会
+**追加三步**识别（说明校验 / AI 解读 / 目标机器连通性预检），结果进 `profile.install` 并渲染在 r1
+的报告区（校验错误带字段路径、AI 解读的前置条件/风险/待确认、预检结论、跳过项）；真正的装机在
+**step3「安装执行」** —— 点顶部步骤条第 3 步会打开独立视图：预检 / 安装计划 / 执行日志 +
+「只看计划」「dry-run 预检」「开始安装」三个动作，进度按 900ms 轮询（断线也能自己跑完）。
+装了该文件时识别日志是 **9 条**，没装仍是原来的 **6 条**（老验收不受影响）。
+
+**跳过语义**：每个校验项独立判断，`skip_checks` 只关掉列出来的那几项。特别地，
+**只跳 `ssh_reachable` 并不等于「不用机器」** —— `remote_os`/`disk_space` 仍会去连机器，
+连不上照样失败；要完全离线跑一遍 dry-run 演示，就把需要机器的项都列进 `skip_checks`。
+反之，`ssh_reachable` 一旦**失败**，其余依赖机器的项会自动短路成 `skipped`
+（不再逐条白等一个 ConnectTimeout）。
 
 ---
 

@@ -34,6 +34,15 @@ IDENT_STEPS = [
     "模型协议识别中…",
 ]
 
+# 上传了「安装说明文件（install.json）」时**追加**的三步。
+# 刻意做成条件追加：没有该文件时仍是原来的 6 步 —— 现有验收（"接入 console 输出 6 条识别日志"）
+# 与前端节奏都不受影响。
+INSTALL_STEPS = [
+    "安装说明校验中…",
+    "安装步骤解读中…",
+    "目标机器连通性预检中…",
+]
+
 _agents: dict[str, dict] = {}
 _lock = threading.RLock()
 
@@ -109,16 +118,37 @@ def config_text_of(agent_id: str | None) -> str:
 
     用途：step1 的 LLM 来源兜底 —— **前端传什么就用什么**。
     前端在 r1「智能体配置文件」槽位上传的内容，后端原样存了下来，这里读回来给 step1 用。
+
+    注意：必须**按 meta 里记的实际文件名**取。因为上传目录里现在还有「安装说明文件」
+    （`<agent_id>-install.json`），若用 `glob(agent_id-*)` 取第一个，两者会互相抢
+    （字母序上 install 常排在配置文件前面，把安装说明当成配置去解析 LLM 来源）。
     """
     if not agent_id:
         return ""
     try:
+        p = _saved_file(agent_id, "config_saved_name")
+        if p is not None:
+            return p.read_text(encoding="utf-8", errors="replace")
         for p in sorted(UPLOAD_DIR.glob(f"{agent_id}-*")):
-            if p.is_file() and not p.name.endswith(".meta.json"):
+            if p.is_file() and not p.name.endswith(".meta.json") and "install" not in p.name.lower():
                 return p.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return ""
     return ""
+
+
+def _saved_file(agent_id: str, key: str) -> Path | None:
+    """按 `<agent_id>.meta.json` 里记的文件名取回落盘的上传物（没有则 None）。"""
+    try:
+        meta_path = UPLOAD_DIR / f"{agent_id}.meta.json"
+        if not meta_path.exists():
+            return None
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        name = str(meta.get(key) or "").strip()
+        p = UPLOAD_DIR / name if name else None
+        return p if (p and p.is_file()) else None
+    except Exception:
+        return None
 
 
 def llm_declared(agent_id: str | None) -> dict:
@@ -326,7 +356,7 @@ def _scrub(parsed: dict) -> dict:
 
 def _build_profile(agent_id: str, binary: dict, config: dict, cfg_text: str,
                    llm_cfg: dict, connectivity: dict | None = None,
-                   probes: dict | None = None) -> dict:
+                   probes: dict | None = None, install_report: dict | None = None) -> dict:
     probes = probes or {}
     parsed = _parse_config_text(cfg_text)
     name = (parsed.get("name") or parsed.get("agent_name")
@@ -409,10 +439,13 @@ def _build_profile(agent_id: str, binary: dict, config: dict, cfg_text: str,
         "backend_llm_model": ((llm_cfg.get("llm") or {}).get("model") or ""),
         "backend_llm_source": ((llm_cfg.get("llm") or {}).get("config_source") or ""),
         "declared": _scrub(parsed),
+        # 安装说明文件（install.json）的处理结果：校验 / AI 解读 / SSH 预检 / 计划（全部脱敏）
+        "install": install_report or {},
     }
 
 
-def _worker(agent_id: str, binary: dict, config: dict, cfg_text: str) -> None:
+def _worker(agent_id: str, binary: dict, config: dict, cfg_text: str,
+            install_text: str = "", install_name: str = "") -> None:
     llm_cfg = llm.load_config()
     parsed = _parse_config_text(cfg_text)
     endpoint = _first(parsed, "api", "base_url", "api_url", "endpoint", "model_api")
@@ -422,6 +455,8 @@ def _worker(agent_id: str, binary: dict, config: dict, cfg_text: str) -> None:
     step = 0.35
     t0 = time.time()
     probes: dict = {}
+    ins: dict = {}        # 安装说明文件的处理结果（校验 / 解读 / 预检 / 计划）
+    doc: dict | None = None
     blocked = ""   # 一旦确认"测不了"（鉴权失败/不可达），后续探测直接标未实测，不再白等网络超时
 
     def run_probe(name: str, fn):
@@ -444,7 +479,8 @@ def _worker(agent_id: str, binary: dict, config: dict, cfg_text: str) -> None:
         probes[name] = v
         return v
 
-    for i, line in enumerate(IDENT_STEPS):
+    steps = list(IDENT_STEPS) + (list(INSTALL_STEPS) if (install_text or "").strip() else [])
+    for i, line in enumerate(steps):
         time.sleep(step)
         ok, text = True, line
         if i == 0:
@@ -469,6 +505,79 @@ def _worker(agent_id: str, binary: dict, config: dict, cfg_text: str) -> None:
         elif i == 5:
             v = run_probe("protocol", lambda: probe_protocol(endpoint, api_key, model))
             ok, text = v.get("ok"), line + f"（{v.get('detail')}）"
+        elif i == 6:
+            # ── 安装说明文件：严格校验（带字段路径的错误） ──
+            import install_doc as _ids
+            ins["file"] = install_name
+            try:
+                rep = _ids.validate(_ids.parse(install_text), base_dir=ROOT)
+                doc = rep["doc"]
+                ins.update({"schema_ok": rep["ok"], "errors": rep["errors"],
+                            "warnings": rep["warnings"]})
+                if rep["ok"]:
+                    import api_install
+                    ins["plan"] = api_install.build_plan(doc, agent_id)
+                    n_skip = len(doc["skip_checks"])
+                    n_step_skip = sum(1 for s in doc["install"]["steps"] if s["skip"])
+                    text = (line + f"（实测：{len(doc['install']['steps'])} 个安装步骤"
+                            + (f"，其中 {n_step_skip} 步声明 skip" if n_step_skip else "")
+                            + f"；跳过校验 {n_skip} 项；{len(rep['warnings'])} 条提醒；"
+                            + ("文件已开 execute → 真执行" if _ids.effective_execute(doc)
+                               else "文件未开 execute → dry-run") + "）")
+                else:
+                    ok = False
+                    head = "；".join(f"{x['path']}: {x['msg']}" for x in rep["errors"][:2])
+                    text = line + f"（失败：{len(rep['errors'])} 处 —— {head}）"
+            except Exception as e:  # noqa: BLE001
+                ok, doc = False, None
+                ins.update({"schema_ok": False, "warnings": [],
+                            "errors": [{"path": "", "msg": str(e)}]})
+                text = line + f"（失败：{e}）"
+        elif i == 7:
+            # ── AI 解读：只产出描述性内容（前置条件/风险/待确认），绝不产生命令 ──
+            if doc is None:
+                ok = None
+                text = line + "（跳过：安装说明校验不通过）"
+            else:
+                import install_ai
+                ai = install_ai.interpret(doc, llm.load_config(llm_declared(agent_id)),
+                                          timeout_s=120)
+                ins["ai"] = ai
+                if ai.get("ok"):
+                    ok = True
+                    tail = ""
+                    if ai.get("order_differs"):
+                        tail += "；模型建议顺序与文件不一致（仅作提示，不改变执行顺序）"
+                    if ai.get("dropped_keys"):
+                        tail += ("；已丢弃模型输出的非描述字段 "
+                                 + ", ".join(ai["dropped_keys"][:3]) + "（这类字段不会被当成命令执行）")
+                    text = (line + f"（实测：{ai['source']} · 前置条件 {len(ai['prerequisites'])} 条"
+                            f" · 风险 {len(ai['risk_notes'])} 条"
+                            f" · 待确认 {len(ai['questions'])} 条" + tail + "）")
+                else:
+                    ok = None
+                    text = line + f"（{ai.get('reason') or '未解读'}）"
+        elif i == 8:
+            # ── 目标机器连通性预检（只读探测；失败不阻塞接入） ──
+            if doc is None:
+                ok = None
+                text = line + "（跳过：安装说明校验不通过）"
+            else:
+                import api_install
+                pc = api_install.precheck_ssh(doc)
+                ins["precheck"] = pc
+                tgt = doc.get("target") or {}
+                who = f"{tgt.get('user')}@{tgt.get('host')}:{tgt.get('port')}"
+                if pc["status"] == "pass":
+                    ok = True
+                    text = line + f"（实测：{who} {pc['detail']}）"
+                elif pc["status"] == "skipped":
+                    ok = None
+                    text = line + f"（跳过：{pc['detail']}）"
+                else:
+                    ok = False
+                    text = (line + f"（未通过：{who} {pc['detail']}）"
+                                   "—— 不阻塞接入，可在 step3「安装执行」里重试")
 
         elapsed = time.time() - t0
         entry = {"ts": f"00:{int(elapsed):02d}.{int((elapsed % 1) * 100):02d}",
@@ -484,7 +593,7 @@ def _worker(agent_id: str, binary: dict, config: dict, cfg_text: str) -> None:
     profile = _build_profile(agent_id, binary, config, cfg_text, llm_cfg,
                              probes.get("connectivity") or {"ok": None, "detail": "未探测",
                                                             "method": ""},
-                             probes)
+                             probes, install_report=(ins or None))
     with _lock:
         a = _agents.get(agent_id)
         if a is None:
@@ -500,6 +609,8 @@ def connect(body: dict) -> dict:
     binary = body.get("binary") or {}
     config = body.get("config") or {}
     cfg_text = body.get("config_content") or ""
+    install = body.get("install") or {}
+    install_text = body.get("install_content") or ""
 
     with _lock:
         n = len(_agents) + 1
@@ -518,23 +629,34 @@ def connect(body: dict) -> dict:
         }
         _persist()
 
-    # 落盘上传物：配置文件真存文本，二进制只存元数据（本后端不消费二进制内容）
+    # 落盘上传物：配置文件与安装说明真存文本（都用于后续执行/追溯），二进制只存元数据
     try:
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        cfg_saved = ""
         if cfg_text:
-            (UPLOAD_DIR / f"{agent_id}-{(config.get('name') or 'config.yaml')}").write_text(
-                cfg_text, encoding="utf-8")
+            cfg_saved = f"{agent_id}-{(config.get('name') or 'config.yaml')}"
+            (UPLOAD_DIR / cfg_saved).write_text(cfg_text, encoding="utf-8")
+        # 安装说明文件单独命名，并把**实际文件名**记进 meta：否则 config_text_of 与
+        # 安装流程的取文件都会 glob(agent_id-*) 而互相抢（把配置当安装说明去解析）。
+        ins_saved = ""
+        if install_text:
+            ins_saved = f"{agent_id}-install-{(install.get('name') or 'install.json')}"
+            (UPLOAD_DIR / ins_saved).write_text(install_text, encoding="utf-8")
         meta = {"agent_id": agent_id, "binary": binary, "config": config,
-                "config_saved": bool(cfg_text)}
+                "config_saved": bool(cfg_text), "config_saved_name": cfg_saved,
+                "install": install, "install_saved": bool(install_text),
+                "install_saved_name": ins_saved}
         (UPLOAD_DIR / f"{agent_id}.meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
     # 回放演示回退文件（未真实选择文件时，前端会带 fallback 名称）
-    threading.Thread(target=_worker, args=(agent_id, binary, config, cfg_text),
+    threading.Thread(target=_worker,
+                     args=(agent_id, binary, config, cfg_text, install_text,
+                           install.get("name") or ""),
                      name=f"agent-{agent_id}", daemon=True).start()
-    return {"ok": True, "agent_id": agent_id, "steps": len(IDENT_STEPS)}
+    return {"ok": True, "agent_id": agent_id, "steps": len(IDENT_STEPS) + (len(INSTALL_STEPS) if install_text.strip() else 0)}
 
 
 def status(agent_id: str) -> dict:

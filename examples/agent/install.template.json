@@ -1,0 +1,68 @@
+{
+  "_comment": "安装说明文件模板（install.json）。r1「智能体接入」的第三个槽位上传本文件；step3「安装执行」按它装机。",
+  "_usage": "把下面所有占位值换成真实值。校验器是严格的：必填缺失/类型不对/校验项写错名字都会在 r1 直接报错（带字段路径）。",
+  "_rules": [
+    "可执行的命令只有 install.steps[].run —— AI 只解读 notes/desc 并规范化顺序，不会替你生成命令。",
+    "默认 dry-run：只有 install.execute=true 才真执行（文件里显式写，别在别处偷偷开）。",
+    "跳过有两种粒度：全局 skip_checks 白名单 + 步骤级 steps[].skip；两者都会记进执行报告。",
+    "认证只支持密钥（ssh_private_key 路径）；口令请先 ssh-add 到 ssh-agent，本工具不代持。"
+  ],
+  "_placeholders": "命令里可用：{zip} {zip_name} {zip_sha256} {zip_url} {remote_dir} {workspace} {host} {port} {user} {agent} {version}",
+
+  "schema_version": 1,
+
+  "agent": { "name": "shopping-agent", "version": "2.0.3" },
+
+  "package": {
+    "_source_说明": "local = 本机（工作台机器）上的 zip，装的时候 scp 过去；url = 目标机器自己下载；upload = 用 r1 上传的那个 zip",
+    "name": "shopping-agent-v2.zip",
+    "source": "local",
+    "path": "examples/agent/shopping-agent-v2.zip",
+    "url": "",
+    "sha256": "",
+    "keep_remote": false
+  },
+
+  "target": {
+    "host": "10.0.0.21",
+    "port": 22,
+    "user": "root",
+    "auth": {
+      "method": "key",
+      "private_key": "C:/Users/me/.ssh/id_ed25519",
+      "passphrase": ""
+    },
+    "os": "linux",
+    "workspace": "/opt/shopping-agent",
+    "sudo": false
+  },
+
+  "install": {
+    "remote_dir": "/tmp/{agent}-install",
+    "execute": false,
+    "steps": [
+      { "id": "unzip", "desc": "解压安装包到工作目录",
+        "run": "mkdir -p {workspace} && unzip -o {remote_dir}/{zip_name} -d {workspace}",
+        "timeout_s": 120 },
+      { "id": "deps", "desc": "安装依赖",
+        "run": "cd {workspace} && pip install -r requirements.txt",
+        "timeout_s": 600 },
+      { "id": "start", "desc": "启动服务并等它起来",
+        "run": "systemctl restart shopping-agent",
+        "check": "curl -sf http://127.0.0.1:8000/health",
+        "timeout_s": 120 }
+    ]
+  },
+
+  "checks": {
+    "ssh_reachable": true,
+    "remote_os": true,
+    "disk_space": "1G",
+    "zip_sha256": false,
+    "post_health": true
+  },
+
+  "skip_checks": ["disk_space", "zip_sha256"],
+
+  "notes": "自由文本：写这份说明的人把注意事项、前置条件、机器上的特殊约定写在这里，AI 解读时读这一段。"
+}

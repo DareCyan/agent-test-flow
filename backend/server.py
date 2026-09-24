@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import api_agent          # noqa: E402
 import api_dataset        # noqa: E402
+import api_install        # noqa: E402
 import llm                # noqa: E402
 import scene_matrix as sm  # noqa: E402
 import step1_runner       # noqa: E402
@@ -126,6 +127,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/dataset-ext/stream":
                 self._sse_dataset(self._int(q.get("id")))
                 return
+            if path == "/api/install/run":
+                self._json(api_install.get(self._int(q.get("id"))))
+                return
+            if path == "/api/install/latest":
+                self._json({"ok": True, "run": api_install.latest_for(q.get("agent_id") or "")})
+                return
+            if path == "/api/install/stream":
+                self._sse_install(q.get("agent_id") or "")
+                return
             if path in ("/", "/index.html"):
                 self._static("index.html")
                 return
@@ -150,6 +160,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path in ("/api/dataset-ext/runs/cancel", "/api/dataset-ext/cancel"):
                 self._json(api_dataset.cancel(int(body.get("id") or 0)))
+                return
+            if path == "/api/install/runs":
+                self._json(api_install.create(body))
+                return
+            if path in ("/api/install/runs/cancel", "/api/install/cancel"):
+                self._json(api_install.cancel(int(body.get("id") or 0)))
+                return
+            if path == "/api/install/plan":
+                # 只看计划（不执行任何东西）：r1 接入后预览、step3 页面「先看要跑什么」都用它
+                self._json(api_install.plan_preview(body.get("agent_id") or "",
+                                                    body.get("install_content") or ""))
                 return
             self._json({"ok": False, "error": f"unknown api: {path}"}, 404)
         except Exception as e:  # noqa: BLE001
@@ -249,6 +270,21 @@ class Handler(BaseHTTPRequestHandler):
                        done_when=lambda: (api_agent.get(agent_id) or {}).get("phase") == "ready")
         finally:
             store.unsubscribe_agent(agent_id, q)
+
+    def _sse_install(self, agent_id: str) -> None:
+        """step3 安装执行的进度 SSE。
+
+        用 `<agent_id>#install` 这个**独立的字符串频道**：既复用 store 现成的订阅/广播，
+        又不会和 r1 接入过程（agent_id 频道）抢事件。
+        """
+        key = f"{agent_id}#install"
+        q = store.subscribe_agent(key)
+        try:
+            self._pump(q, api_install.latest_for(agent_id),
+                       done_when=lambda: (api_install.latest_for(agent_id) or {})
+                       .get("status") in ("completed", "failed", "cancelled"))
+        finally:
+            store.unsubscribe_agent(key, q)
 
 
 def _port_in_use(host: str, port: int) -> bool:
