@@ -68,6 +68,15 @@
     raw(id) { return jget('api/dataset-ext/run?id=' + encodeURIComponent(id)); },
     cancel(id) { return jpost('api/dataset-ext/runs/cancel', { id: id }); },
 
+    /* step3 安装执行（按安装说明文件装机） */
+    installPlan(agentId, inline) {
+      return jpost('api/install/plan', { agent_id: agentId || '', install_content: inline || '' });
+    },
+    installStart(payload) { return jpost('api/install/runs', payload || {}); },
+    installRun(id) { return jget('api/install/run?id=' + encodeURIComponent(id)); },
+    installLatest(agentId) { return jget('api/install/latest?agent_id=' + encodeURIComponent(agentId || '')); },
+    installCancel(id) { return jpost('api/install/runs/cancel', { id: id }); },
+
     /* 订阅 step1 进度：SSE 作触发源 + 1.2s 轮询兜底（SSE 断线也能跑完） */
     stream(id, onView) {
       let closed = false, es = null, timer = null, inflight = false, last = 0;

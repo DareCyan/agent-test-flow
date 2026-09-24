@@ -29,13 +29,18 @@ const DEMO = {
     logs: ['智能体接入中…','单轮对话调用方式识别中…','多轮对话调用方式识别中…','配置文件识别中…','模型联通性识别中…','模型协议识别中…'],
   },
   /* 二进制槽位：传 .zip 安装包；后端不校验、不落盘、不解析，只记文件名/大小。
-     配置槽位：真读文本并解析（api / key / model），模板见 examples/agent/。 */
+     配置槽位：真读文本并解析（api / key / model），模板见 examples/agent/。
+     安装说明槽位：真读文本（install.json）→ 后端严格校验 + AI 解读 + SSH 预检，
+     并作为 step3「安装执行」的唯一依据；格式规范见 README「安装说明文件」。
+     注意：这个槽位**不选文件就不带**（安装说明是可选的），所以不给"回放演示"的回退名。 */
   upload: {
     slots: [
       { id:'bin', label:'智能体二进制文件', hint:'.zip · 点击或拖拽', accept:'.zip',
         fallback:{ name:'shopping-agent-v2.zip', size:'2.4 MB' } },
       { id:'cfg', label:'智能体配置文件', hint:'.yaml / .json · 含 api / key / model', accept:'.yaml,.yml,.json',
         fallback:{ name:'shopping-agent.yaml', size:'1.8 KB' } },
+      { id:'ins', label:'安装说明文件', hint:'.json · 机器 SSH 信息 + 安装步骤（可选）', accept:'.json',
+        optional:true, fallback:{ name:'install.json', size:'1.2 KB' } },
     ],
   },
 
@@ -304,6 +309,48 @@ textarea:focus{outline:none;border-color:var(--cyan-mid)}
 /* ---------- 幽灵文字 ---------- */
 .ghost{position:absolute;font-size:11px;color:var(--ink3);filter:blur(.4px);pointer-events:none;white-space:nowrap;animation:ghostLife var(--life,1.2s) ease-in-out forwards}
 @keyframes ghostLife{0%{opacity:0}25%{opacity:.45}75%{opacity:.4}100%{opacity:0}}
+
+/* ---------- r1 · 安装说明报告（校验 / AI 解读 / 目标机器预检） ---------- */
+.r1-install{display:none;margin-top:8px;border-top:1px dashed var(--line);padding-top:7px;font-size:11px;color:var(--ink3);line-height:1.55}
+.r1-install.on{display:block}
+.r1-install h5{font-size:11px;font-weight:600;color:var(--ink2);margin-bottom:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.r1-install .tag{font:10px var(--mono);padding:1px 5px;border-radius:3px;background:var(--line2);color:var(--ink3)}
+.r1-install .tag.ok{background:#EAF6EE;color:#1F7A46}
+.r1-install .tag.bad{background:#FDECEC;color:#B23B3B}
+.r1-install .tag.dry{background:#FFF7E6;color:#8A6D1F}
+.r1-install ul{margin:3px 0 0 14px}
+.r1-install li{margin:1px 0}
+.r1-install .err{color:#B23B3B}
+.r1-install .warn{color:#8A6D1F}
+.r1-install .lnk{color:var(--cyan-deep);text-decoration:underline;cursor:pointer}
+
+/* ---------- step3 · 安装执行视图（独立覆盖层：装机不是"数据集生成"，不混屏） ---------- */
+body.iv-open{overflow:hidden}
+.iv{position:fixed;inset:0;z-index:60;background:#F8F9FB;display:none;flex-direction:column;padding:14px 16px 18px;overflow:auto}
+.iv.on{display:flex}
+.iv-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:9px}
+.iv-title{font-size:13px;font-weight:600;color:var(--ink)}
+.iv-sub{font:11px var(--mono);color:var(--ink4);margin-left:6px}
+.iv-actions{margin-left:auto;display:flex;gap:7px;align-items:center}
+.iv-badge{font:10px var(--mono);padding:2px 7px;border-radius:3px;background:var(--line2);color:var(--ink3)}
+.iv-badge.ok{background:#EAF6EE;color:#1F7A46}
+.iv-badge.bad{background:#FDECEC;color:#B23B3B}
+.iv-badge.dry{background:#FFF7E6;color:#8A6D1F}
+.iv-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.1fr);gap:12px;margin-top:12px;align-items:start}
+.iv-grid section{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:9px 10px;min-height:110px}
+.iv-grid h4{font-size:11px;color:var(--ink2);margin-bottom:7px;letter-spacing:.3px}
+.iv-row{font-size:11px;color:var(--ink3);padding:4px 0;border-bottom:1px dotted var(--line3)}
+.iv-row:last-child{border-bottom:none}
+.iv-row b{color:var(--ink2);font-weight:500}
+.iv-tag{font:10px var(--mono);padding:1px 5px;border-radius:3px;background:var(--line2);color:var(--ink3);margin-left:4px}
+.iv-tag.ok{background:#EAF6EE;color:#1F7A46}
+.iv-tag.bad{background:#FDECEC;color:#B23B3B}
+.iv-tag.dry{background:#FFF7E6;color:#8A6D1F}
+.iv-cmd{font:10px var(--mono);color:var(--ink2);background:#F7F8FA;border-radius:3px;padding:3px 5px;margin-top:3px;white-space:pre-wrap;word-break:break-all}
+.iv-logs{font:10px var(--mono);color:var(--ink3);max-height:430px;overflow:auto}
+.iv-logs div{padding:1px 0;line-height:1.5;word-break:break-all}
+.iv-logs .error{color:#B23B3B}.iv-logs .success{color:#1F7A46}.iv-logs .warning{color:#8A6D1F}
+.iv-empty{font-size:11px;color:var(--ink4);line-height:1.65}
 </style>
 <!-- 顶部总流程步骤条（取自原 pipeline.html 的 .mp-step-*，按 index 紧凑栅格重新定标） -->
 <link rel="stylesheet" href="css/pipeline-bar.css">
@@ -361,6 +408,7 @@ textarea:focus{outline:none;border-color:var(--cyan-mid)}
       <div style="height:10px;flex:none"></div>
       <div class="btn btn-primary" id="btn-connect">接入智能体</div>
       <div class="console"><div id="console-body"><span class="waiting">Waiting for agent… <span class="caret"></span></span></div></div>
+      <div class="r1-install" id="r1-install"></div>
     </section>
 
     <!-- 区域 3：任务空间树（目录树） -->
@@ -490,6 +538,37 @@ textarea:focus{outline:none;border-color:var(--cyan-mid)}
     </div>
 
   </main>
+</div>
+
+<!-- ================= step3 · 安装执行（独立视图：按安装说明文件把 zip 装到目标机器） =================
+     刻意做成覆盖层而不是塞进 r3/r6：装机跟"数据集生成"是两件事，混在一屏只会互相干扰。
+     默认 dry-run；「开始安装」只在文件里 install.execute=true 时才可用（后端还会再拦一道）。 -->
+<div class="iv" id="install-view">
+  <div class="iv-head">
+    <div class="iv-title">步骤 3 · 安装执行<span class="iv-sub" id="iv-sub"></span></div>
+    <div class="iv-actions">
+      <span class="iv-badge" id="iv-mode">—</span>
+      <div class="btn btn-outline" id="iv-plan">只看计划</div>
+      <div class="btn btn-outline" id="iv-dry">dry-run 预检</div>
+      <div class="btn btn-primary" id="iv-start">开始安装</div>
+      <div class="btn btn-disabled" id="iv-cancel">取消</div>
+      <div class="btn btn-outline" id="iv-close">返回 step1</div>
+    </div>
+  </div>
+  <div class="iv-grid">
+    <section>
+      <h4>预检（SSH 可达 / 系统 / 磁盘 / 包完整性 / 装后健康）</h4>
+      <div id="iv-checks"><div class="iv-empty">打开时自动载入计划…</div></div>
+    </section>
+    <section>
+      <h4>安装计划（可执行命令只来自安装说明文件）</h4>
+      <div id="iv-steps"></div>
+    </section>
+    <section>
+      <h4>执行日志</h4>
+      <div class="iv-logs" id="iv-logs"></div>
+    </section>
+  </div>
 </div>
 
 <script>
@@ -1140,6 +1219,16 @@ async function readConfigText(){
   if(!sel||!sel.file||typeof sel.file.text!=='function') return '';
   try{ return await sel.file.text(); }catch(e){ return ''; }
 }
+async function readInstallText(){
+  const sel=upSel.ins;
+  if(!sel||!sel.file||typeof sel.file.text!=='function') return '';
+  try{ return await sel.file.text(); }catch(e){ return ''; }
+}
+/* 安装说明是可选的：没真选文件就不带（省得后端以为上传了一份空的说明） */
+function installPayload(){
+  const sel=upSel.ins;
+  return sel?{install:{name:sel.name,size:sel.size}}:{};
+}
 function agentPayload(){
   const pick=slot=>{
     const s=DEMO.upload.slots.find(x=>x.id===slot);
@@ -1295,6 +1384,7 @@ function renderAgentReady(profile){
   const model=(profile&&profile.model&&profile.model!=='未声明')?(' · '+profile.model):'';
   ok.innerHTML=`<span class="ts">${last?last.textContent:''}</span>● ${escHtml(name)}${escHtml(model)} · ${DEMO.agent.ready}`;
   body.appendChild(ok);
+  renderInstallReport((profile&&profile.install)||null);   // 有安装说明文件时展示校验/解读/预检
 }
 
 /* 用后端 summary 覆盖全局数据模型（DOM 结构与渲染算法不变） */
@@ -1346,7 +1436,9 @@ async function connect(){
   const body=document.getElementById('console-body');
   body.innerHTML='';
   try{
-    const payload=Object.assign(agentPayload(),{config_content:await readConfigText()});
+    const payload=Object.assign(agentPayload(),
+      {config_content:await readConfigText(), install_content:await readInstallText()},
+      installPayload());
     const res=await API.agentConnect(payload);
     if(!res.ok) throw new Error(res.error||'接入失败');
     apiAgentId=res.agent_id;
@@ -1564,8 +1656,11 @@ function setStep(n,quiet){
     routeNote('步骤 '+v+'「'+stepNameOf(v)+'」本次未实现（占位），页面仍是 step1 工作台');
   return changed;
 }
-/* 点步骤条 → 只改路由里的 step；页面内容不切（2/3/4 没有页面） */
-function onStepClick(n){ setStep(n); writeRoute(apiRunId,currentStep); }
+/* 点步骤条 → 只改路由里的 step；step3 会切到安装执行视图（那里才是真页面） */
+function onStepClick(n){
+  setStep(n); writeRoute(apiRunId,currentStep);
+  if(currentStep===3) openInstall(); else closeInstall();
+}
 
 /* 路由相关的提示行：落在 r1 的 console 里（该面板本来就是「过程日志」） */
 function routeNote(msg){
@@ -1575,10 +1670,15 @@ function routeNote(msg){
   body.appendChild(el); body.scrollTop=body.scrollHeight;
 }
 
-/* 读路由：step 同步到步骤条；带 run id 就把它恢复出来 */
+/* 读路由：step 同步到步骤条；step3 → 打开安装视图；带 id 就恢复对应的那次执行 */
 async function applyRoute(){
   const r=parseRoute();
   if(r.step!==currentStep) setStep(r.step,true);
+  if(r.step===3){
+    await openInstall(r.runId||0);
+    return;                                   // step3 的 id 是安装 run，不是数据集 run
+  }
+  closeInstall();
   if(!r.runId) return;
   if(!(API&&API.live)) return;                        // 演示模式没有可恢复的 run
   if(r.runId===apiRunId&&phase!=='idle') return;       // 就是这个 run，别重来
@@ -1649,6 +1749,216 @@ async function openRun(rid){
   }
 }
 
+/* ================= step3 · 安装执行控制器 =================
+   数据来源全部是后端：/api/install/plan（只看计划）、/api/install/runs（开始）、
+   /api/install/run?id=（进度，900ms 轮询；装了断线也能自己跑完）。
+   安全约束在前端也照抄一遍：**真执行必须由安装说明文件的 install.execute=true 决定**，
+   后端 `effective_execute()` 会再拦一次 —— 前端按钮只是把这件事显示出来。 */
+let ivRunId=0, ivTimer=null, ivPlan=null, ivAgent='';
+const IV_STATUS={pass:['ok','通过'],ok:['ok','成功'],fail:['bad','未通过'],skipped:['','跳过'],
+  'dry-run':['dry','dry-run'],warn:['dry','注意'],pending:['','待执行'],none:['','无检查']};
+const IV_RUN_CN={running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消'};
+
+function ivTag(status){
+  const m=IV_STATUS[status]||['',status||''];
+  return `<span class="iv-tag ${m[0]}">${escHtml(m[1])}</span>`;
+}
+function ivEl(id){ return document.getElementById(id); }
+function ivNote(text,cls){
+  const box=ivEl('iv-logs'); if(!box) return;
+  const d=document.createElement('div'); d.className=cls||''; d.textContent=text;
+  box.appendChild(d); box.scrollTop=box.scrollHeight;
+}
+async function openInstall(runId){
+  const v=ivEl('install-view'); if(!v) return;
+  v.classList.add('on'); document.body.classList.add('iv-open');
+  await ivRefresh();
+  if(runId) await ivOpenRunById(runId);      // 深链带 id 时用指定那次安装覆盖自动载入的「最近一次」
+}
+/* 深链/切回：按 id 载入某一次安装执行（step3 路由里的 id 就是安装 run 的 id） */
+async function ivOpenRunById(rid){
+  try{
+    const g=await API.installRun(rid);
+    if(!g||!g.ok){ ivNote('取不到安装 run #'+rid+'：'+((g&&g.error)||''),'error'); return; }
+    ivRenderRun(g.run);
+    if(g.run.status==='running') ivStartPoll(g.run.id);
+  }catch(e){ ivNote('取安装 run 异常：'+e,'error'); }
+}
+function closeInstall(){
+  const v=ivEl('install-view'); if(v) v.classList.remove('on');
+  document.body.classList.remove('iv-open');
+  ivStopPoll();
+}
+function ivStopPoll(){ if(ivTimer){ clearInterval(ivTimer); ivTimer=null; } }
+function ivRenderEmpty(msg){
+  ivEl('iv-sub').textContent='';
+  ivEl('iv-mode').textContent='—'; ivEl('iv-mode').className='iv-badge';
+  ivEl('iv-checks').innerHTML=`<div class="iv-empty">${escHtml(msg)}</div>`;
+  ivEl('iv-steps').innerHTML=''; ivEl('iv-logs').innerHTML='';
+  ivSetStart(false,'开始安装','文件未就绪');
+  ivEl('iv-cancel').className='btn btn-disabled'; ivEl('iv-cancel').style.pointerEvents='none';
+}
+function ivSetStart(enabled,label,title){
+  const b=ivEl('iv-start'); if(!b) return;
+  b.textContent=label;
+  b.className='btn '+(enabled?'btn-primary':'btn-disabled');
+  b.style.pointerEvents=enabled?'':'none';
+  b.title=title||'';
+}
+async function ivRefresh(){
+  if(!(API&&API.live)){ ivRenderEmpty('演示模式：没有后端，装机流程不可用'); return; }
+  if(!apiAgentId){ ivRenderEmpty('还没接入智能体：先在 r1 接入（有安装说明文件就上传它）再回来'); return; }
+  ivAgent=apiAgentId;
+  ivNote('载入安装计划…');
+  try{
+    const p=await API.installPlan(apiAgentId);
+    if(!p.ok){ ivPlan=null; ivRenderEmpty('取不到安装计划：'+(p.error||'')); return; }
+    ivPlan=p; ivRenderPlan(p);
+    const latest=await API.installLatest(apiAgentId);
+    if(latest&&latest.run){
+      ivRenderRun(latest.run);
+      if(latest.run.status==='running') ivStartPoll(latest.run.id);
+    }
+  }catch(e){ ivRenderEmpty('取安装计划失败：'+e); }
+}
+function ivRenderPlan(p){
+  const plan=p.plan||{};
+  ivEl('iv-sub').textContent=(plan.target||'')+(plan.package?(' · '+plan.package):'');
+  const ex=!!plan.execute;
+  ivEl('iv-mode').textContent=ex?'真执行（文件已开 execute）':'dry-run（文件未开 execute）';
+  ivEl('iv-mode').className='iv-badge '+(ex?'bad':'dry');
+  const ck=p.checks||{};
+  ivEl('iv-checks').innerHTML=Object.keys(ck).map(k=>{
+    const c=ck[k];
+    return `<div class="iv-row"><b>${escHtml(c.label||k)}</b>`
+      +(c.enabled?'<span class="iv-tag ok">启用</span>':'<span class="iv-tag">跳过</span>')
+      +(c.reason?`<div class="iv-empty">跳过原因：${escHtml(c.reason)}</div>`:'')+'</div>';
+  }).join('')||'<div class="iv-empty">没有预检项</div>';
+  ivEl('iv-steps').innerHTML=(plan.steps||[]).map((s,i)=>
+    `<div class="iv-row"><b>${i+1}. ${escHtml(s.id)}</b>`
+    +(s.skip?'<span class="iv-tag">跳过</span>':'')
+    +(s.desc?`<div>${escHtml(s.desc)}</div>`:'')
+    +`<div class="iv-cmd">${escHtml(s.cmd||'')}</div>`
+    +(s.check_cmd?`<div class="iv-cmd">check: ${escHtml(s.check_cmd)}</div>`:'')
+    +(s.skip_reason?`<div class="iv-empty">跳过原因：${escHtml(s.skip_reason)}</div>`:'')+'</div>'
+  ).join('')||'<div class="iv-empty">文件里没有安装步骤</div>';
+  ivEl('iv-logs').innerHTML='';
+  ivNote('计划就绪：'+((plan.steps||[]).length)+' 步 · '+(ex?'真执行':'dry-run')
+         +(((plan.skips||[]).length)?(' · 跳过校验 '+plan.skips.map(s=>s.id).join('、')):''));
+  ivSetStart(ex,'开始安装',ex?'按文件里的步骤真装到目标机器'
+    :'文件里 install.execute=false（默认 dry-run）：要真装请改成 true 后重新上传');
+}
+function ivRenderRun(run){
+  ivRunId=run.id;
+  const st=run.status||'running';
+  const fin=(st==='completed'||st==='failed'||st==='cancelled');
+  ivEl('iv-mode').textContent=(run.dry_run?'dry-run':'真执行')+' · run #'+run.id+' · '+(IV_RUN_CN[st]||st);
+  ivEl('iv-mode').className='iv-badge '+(st==='completed'?((run.result||{}).ok?'ok':'bad')
+    :(st==='failed'?'bad':(run.dry_run?'dry':'')));
+  const checks=run.checks||[];
+  ivEl('iv-checks').innerHTML=checks.length?checks.map(c=>
+    `<div class="iv-row"><b>${escHtml(c.label||c.id)}</b>${ivTag(c.status)}`
+    +(c.detail?`<div class="iv-empty">${escHtml(c.detail)}</div>`:'')
+    +(c.skip_reason?`<div class="iv-empty">跳过原因：${escHtml(c.skip_reason)}</div>`:'')
+    +(c.show?`<div class="iv-cmd">${escHtml(c.show)}</div>`:'')+'</div>').join('')
+    :'<div class="iv-empty">预检还没开始</div>';
+  const steps=(run.steps&&run.steps.length)?run.steps:(((run.plan||{}).steps)||[]);
+  ivEl('iv-steps').innerHTML=steps.length?steps.map((s,i)=>
+    `<div class="iv-row"><b>${i+1}. ${escHtml(s.id)}</b>${ivTag(s.status||'pending')}`
+    +`<div class="iv-cmd">${escHtml(s.cmd||'')}</div>`
+    +(s.skip_reason?`<div class="iv-empty">${escHtml(s.skip_reason)}</div>`:'')
+    +(s.check&&s.check.status&&s.check.status!=='none'
+      ?`<div class="iv-empty">装后校验 ${escHtml(s.check.status)}：${escHtml(String(s.check.detail||'').slice(0,220))}</div>`:'')
+    +(s.err?`<div class="iv-empty" style="color:#B23B3B">${escHtml(String(s.err).slice(0,300))}</div>`:'')
+    +'</div>').join(''):'<div class="iv-empty">还没有步骤</div>';
+  const box=ivEl('iv-logs');
+  box.innerHTML=(run.logs||[]).map(l=>
+    `<div class="${escHtml(l.level||'')}">[${escHtml(l.ts||'')}] ${escHtml(l.text||'')}</div>`).join('');
+  box.scrollTop=box.scrollHeight;
+  if(st==='running'){ ivSetStart(false,'安装中…','正在执行'); }
+  else{
+    const canRun=!!(ivPlan&&ivPlan.plan&&ivPlan.plan.execute);
+    const res=run.result||{};
+    ivSetStart(canRun,'再装一次',res.ok?'上次成功，可再跑一次':'上次未通过，可重试');
+  }
+  const cancel=ivEl('iv-cancel');
+  cancel.className=st==='running'?'btn btn-outline':'btn btn-disabled';
+  cancel.style.pointerEvents=st==='running'?'':'none';
+  if(fin) ivStopPoll();
+}
+function ivStartPoll(id){
+  ivStopPoll();
+  ivTimer=setInterval(async()=>{
+    try{ const r=await API.installRun(id); if(r&&r.ok) ivRenderRun(r.run); }catch(e){ /* 下次再试 */ }
+  },900);
+}
+async function ivStart(dry){
+  if(!apiAgentId) return;
+  ivNote('开始安装（'+(dry===false?'真执行':'dry-run 预检')+'）…');
+  try{
+    const r=await API.installStart({agent_id:apiAgentId, dry_run:dry!==false});
+    if(!r.ok){ ivNote('启动失败：'+(r.error||''),'error'); return; }
+    ivRunId=r.id; ivStartPoll(r.id);
+    if(currentStep===3) writeRoute(r.id,3);    // 地址栏跟着这次安装执行：刷新/分享回到同一次
+    const g=await API.installRun(r.id);
+    if(g&&g.ok) ivRenderRun(g.run);
+  }catch(e){ ivNote('启动异常：'+e,'error'); }
+}
+async function ivCancel(){
+  if(!ivRunId) return;
+  try{ await API.installCancel(ivRunId); ivNote('已请求取消 run #'+ivRunId+''); }catch(e){}
+}
+async function ivPreviewOnly(){
+  if(!apiAgentId) return;
+  try{
+    const p=await API.installPlan(apiAgentId);
+    if(!p.ok){ ivNote('取计划失败：'+(p.error||''),'error'); return; }
+    ivPlan=p; ivRenderPlan(p);
+    ivNote('只看了计划：没有连机器、没有执行任何命令');
+  }catch(e){ ivNote('异常：'+e,'error'); }
+}
+
+/* r1 接入完成后展示：校验结果 + AI 解读 + 目标机器预检 + 计划摘要 */
+function renderInstallReport(ins){
+  const box=document.getElementById('r1-install'); if(!box) return;
+  if(!ins||!ins.file){ box.classList.remove('on'); box.innerHTML=''; return; }
+  const plan=ins.plan||{};
+  const ex=!!plan.execute;
+  const out=[];
+  out.push(`<h5>安装说明 ${escHtml(ins.file)}`
+    +(ins.schema_ok?'<span class="tag ok">校验通过</span>':'<span class="tag bad">校验未通过</span>')
+    +`<span class="tag">${((plan.steps||[]).length)} 步</span>`
+    +`<span class="tag ${ex?'bad':'dry'}">${ex?'真执行':'dry-run'}</span>`
+    +'<span class="lnk" id="r1-ins-go">去 step3 安装执行 →</span></h5>');
+  if((ins.errors||[]).length)
+    out.push('<div class="err">'+ins.errors.slice(0,4).map(e=>escHtml((e.path?e.path+': ':'')+e.msg)).join('<br>')+'</div>');
+  if((ins.warnings||[]).length)
+    out.push('<div class="warn">提醒：'+ins.warnings.slice(0,3).map(w=>escHtml(w.path+': '+w.msg)).join('；')+'</div>');
+  const pc=ins.precheck||{};
+  if(pc.status) out.push('<div>目标机器预检：'+ivTag(pc.status)+' '+escHtml(String(pc.detail||'').slice(0,160))+'</div>');
+  if((plan.skips||[]).length)
+    out.push('<div>跳过校验：'+escHtml(plan.skips.map(s=>s.id+'（'+s.reason+'）').join('；'))+'</div>');
+  const ai=ins.ai||{};
+  if(ai.ok){
+    if(ai.summary) out.push('<div>AI 解读：'+escHtml(ai.summary)+'</div>');
+    if((ai.prerequisites||[]).length)
+      out.push('<div>前置条件：<ul>'+ai.prerequisites.map(x=>'<li>'+escHtml(x)+'</li>').join('')+'</ul></div>');
+    if((ai.risk_notes||[]).length)
+      out.push('<div>风险：<ul>'+ai.risk_notes.map(x=>'<li>'+escHtml(x)+'</li>').join('')+'</ul></div>');
+    if((ai.questions||[]).length)
+      out.push('<div>待确认：<ul>'+ai.questions.map(x=>'<li>'+escHtml(x)+'</li>').join('')+'</ul></div>');
+    if(ai.order_differs) out.push('<div class="warn">模型建议的执行顺序与文件不一致，仅作提示（执行按文件顺序）。</div>');
+    if((ai.dropped_keys||[]).length)
+      out.push('<div class="warn">已丢弃模型输出的非描述字段：'+escHtml(ai.dropped_keys.join(', '))+'（这类内容不会被当成命令执行）</div>');
+  }else if(ai.reason){
+    out.push('<div>AI 解读：'+escHtml(ai.reason)+'</div>');
+  }
+  box.innerHTML=out.join('');
+  box.classList.add('on');
+  const go=document.getElementById('r1-ins-go');
+  if(go) go.addEventListener('click',()=>{ setStep(3); writeRoute(apiRunId,3); openInstall(); });
+}
+
 /* ================= 事件与初始化 ================= */
 document.getElementById('btn-connect').addEventListener('click',connect);
 /* 步骤条可点：只切换路由里的 step（2/3/4 是占位，点了会在 console 里提示） */
@@ -1659,6 +1969,12 @@ document.querySelectorAll('.mp-step').forEach(el=>{
   el.addEventListener('click',()=>onStepClick(n));
 });
 document.getElementById('btn-run').addEventListener('click',()=>{if(phase==='ready'||phase==='done'||phase==='failed')run()});
+/* step3 安装执行的四个动作 */
+document.getElementById('iv-plan').addEventListener('click',ivPreviewOnly);
+document.getElementById('iv-dry').addEventListener('click',()=>ivStart(true));
+document.getElementById('iv-start').addEventListener('click',()=>ivStart(false));   // 真执行由文件 execute 决定
+document.getElementById('iv-cancel').addEventListener('click',ivCancel);
+document.getElementById('iv-close').addEventListener('click',()=>{ closeInstall(); setStep(1); writeRoute(apiRunId,1); });
 applyConfig(); buildUploads(); buildTree(); buildMatrix(); buildR5(); buildR6(); updateCounts(); initGenSplit(); setPhase('idle');
 
 /* 传输层初始化：探测后端 → 预取场景矩阵（用于 planner 维度注入与场景选择） */
@@ -1695,6 +2011,25 @@ window.__api={
   get step(){return currentStep},
   route:()=>({runId:apiRunId, step:currentStep, hash:location.hash,
               parsed:parseRoute(), text:routeText(apiRunId,currentStep)}),
+  /* step3 安装执行视图的状态（供自动化验收读取） */
+  installView:()=>{
+    const v=document.getElementById('install-view');
+    const b=document.getElementById('iv-start');
+    const n=sel=>document.querySelectorAll(sel).length;
+    return {
+      open:!!(v&&v.classList.contains('on')),
+      runId:ivRunId,
+      mode:((document.getElementById('iv-mode')||{}).textContent)||'',
+      checks:n('#iv-checks .iv-row'),
+      steps:n('#iv-steps .iv-row'),
+      logs:n('#iv-logs div'),
+      startEnabled:!!(b&&b.className.indexOf('btn-disabled')<0),
+    };
+  },
+  installReport:()=>{
+    const box=document.getElementById('r1-install');
+    return {visible:!!(box&&box.classList.contains('on')), text:(box&&box.textContent)||''};
+  },
   get scene(){return liveScene},
   agentProfile:()=>apiAgentProfile,
   slots:()=>DEMO.upload.slots.map(s=>({id:s.id,label:s.label,hint:s.hint,accept:s.accept,fallback:s.fallback})),
