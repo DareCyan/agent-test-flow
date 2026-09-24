@@ -10,11 +10,25 @@
 
 ---
 
+## 0. 两种安装方式，先选一种
+
+| 方式 | 适用 | 做法 | 验证结果 |
+| --- | --- | --- | --- |
+| **A. 容器化（推荐）** | 机器上有 Docker（目标机器已有 29.8.1） | 传镜像 tar → `docker load` → 容器里跑 | **12/12 通过** |
+| **B. 直接装到系统** | 没有 Docker，或希望 `opencode` 直接在 PATH 里 | 传 zip → `./install.sh` | **6/6 通过** |
+
+容器化的完整说明见 **`container/README.md`**（含 Dockerfile、构建脚本、使用示例）。
+两种方式都已在目标服务器上实测通过，互不依赖。
+
+---
+
 ## 1. 交付物清单
 
 | 文件 | 说明 |
 | --- | --- |
-| `opencode-cli-v1.18.32-linux-x64-offline.zip` | 交付包（约 60 MB，含二进制 + 安装/校验脚本 + 文档 + 校验和） |
+| `opencode-cli-v1.18.32-linux-x64-offline.zip` | 系统安装包（约 60 MB，含二进制 + 安装/校验脚本 + 文档 + 校验和） |
+| `opencode-container-1.18.32-linux-amd64.tar` | **容器镜像**（约 90 MB，`docker load` 即用） |
+| `container/` | 容器化方案：`Dockerfile`、`container-install.sh`、`README.md` |
 | `dist/bundle-manifest.json` | 包元数据（版本、大小、SHA-256） |
 | `checksums.json` | 上游 release 产物校验信息（下载来源与哈希） |
 
@@ -45,6 +59,7 @@ upstream-install.sh.reference    官方联网安装脚本（仅供参考，离�
 | CPU / 内存 | 8 核 / 15.6 GB |
 | 磁盘 | `/` 99 GB，已用 5.6 GB，可用 89 GB（充裕） |
 | 已有 opencode | 未安装 |
+| **容器运行时** | **Docker 29.8.1 已装且运行中**（containerd active，存储驱动 overlayfs，cgroup v2） |
 | 可用工具 | `curl` `wget` `tar` `unzip` `gzip` `sha256sum` 均已就绪 |
 | **外网出口** | **无**（访问 github.com 超时）→ 必须离线传输 |
 | PATH | 含 `/usr/local/bin` |
