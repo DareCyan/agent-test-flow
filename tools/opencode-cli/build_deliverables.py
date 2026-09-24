@@ -1,7 +1,7 @@
-"""
+﻿"""
 生成 opencode 的三个交付文件：
 
-  (1) 安装包   dist/opencode-container-1.18.32-linux-amd64.tar      (+ .tar.gz)
+  (1) 安装包   dist/opencode-container-1.18.32-linux-amd64.zip          (真 zip，内含镜像 tar)
   (2) 配置文件 dist/opencode.json          <- 真实 provider/key，本地保留
   (3) 安装说明 dist/install.json           <- 按项目 schema，可用 validate 校验
 
@@ -13,10 +13,10 @@
 """
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import os
+import zipfile
 import shutil
 import sys
 
@@ -90,33 +90,40 @@ def main() -> int:
     print(f"(1) 安装包 {IMAGE_TAR_NAME}  {os.path.getsize(dst_tar):,} B")
     print(f"    sha256 {tar_sha}")
 
-    dst_gz = dst_tar + ".gz"
-    # 总是重建：之前失败/中断可能留下截断的 gz，而 sha256 一致会掩盖这个问题
-    if os.path.exists(dst_gz):
-        os.remove(dst_gz)
-    print("    压缩中 …", end="", flush=True)
-    # gzip.open() 不接受 mtime，用 GzipFile 才能置零 -> 产物可复现
-    with open(dst_tar, "rb") as fi, open(dst_gz, "wb") as raw:
-        with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6, mtime=0) as fo:
-            shutil.copyfileobj(fi, fo, 1 << 20)
+    dst_zip = os.path.join(DIST, f"opencode-container-{VERSION}-linux-amd64.zip")
+    # 真 zip（拉链格式），而不是改名的 gzip：前端的二进制槽位 accept='.zip'，
+    # 且 installer 侧用 unzip 解出镜像 tar。tar 压缩后再 zip 收效很小，
+    # 所以这里 store 不压缩——体积诚实，解压也快。
+    if os.path.exists(dst_zip):
+        os.remove(dst_zip)
+    print("    打包 zip …", end="", flush=True)
+    with zipfile.ZipFile(dst_zip, "w", zipfile.ZIP_STORED) as z:
+        zi = zipfile.ZipInfo(f"opencode-image.tar", date_time=(2026, 9, 24, 0, 0, 0))
+        zi.external_attr = 0o644 << 16
+        with open(dst_tar, "rb") as f:
+            z.writestr(zi, f.read())
     print(" 完成")
 
-    # 立刻验证完整性：解压长度必须等于原 tar
-    expected_len = os.path.getsize(dst_tar)
-    actual_len = 0
-    with gzip.open(dst_gz, "rb") as f:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            actual_len += len(chunk)
-    if actual_len != expected_len:
-        os.remove(dst_gz)
-        raise SystemExit(f"gzip 产物不完整：解出 {actual_len} 字节，应为 {expected_len}；已删除")
-    print(f"    完整性 OK：解出 {actual_len:,} 字节 == 原 tar")
-    gz_sha = sha256_file(dst_gz)
-    print(f"    {os.path.basename(dst_gz)}  {os.path.getsize(dst_gz):,} B")
-    print(f"    sha256 {gz_sha}")
+    # 立刻验证：zip 内条目大小必须等于原 tar，且能完整读回
+    with zipfile.ZipFile(dst_zip) as z:
+        info = z.getinfo("opencode-image.tar")
+        if info.file_size != os.path.getsize(dst_tar):
+            os.remove(dst_zip)
+            raise SystemExit(f"zip 内 tar 大小不符：{info.file_size} != {os.path.getsize(dst_tar)}")
+        n = 0
+        with z.open("opencode-image.tar") as f:
+            while True:
+                c = f.read(1 << 20)
+                if not c:
+                    break
+                n += len(c)
+    if n != os.path.getsize(dst_tar):
+        os.remove(dst_zip)
+        raise SystemExit(f"zip 读回长度不符：{n} != {os.path.getsize(dst_tar)}；已删除")
+    zip_sha = sha256_file(dst_zip)
+    print(f"    完整性 OK：zip 内 tar 读回 {n:,} 字节 == 原 tar")
+    print(f"    {os.path.basename(dst_zip)}  {os.path.getsize(dst_zip):,} B")
+    print(f"    sha256 {zip_sha}")
 
     # ── (2) 配置文件 ─────────────────────────────────────────────────────
     providers = load_real_config()
@@ -145,8 +152,8 @@ def main() -> int:
     print(f"    模板（可提交）: {os.path.relpath(tpl_path, ROOT)}")
 
     # ── (3) 安装说明 ─────────────────────────────────────────────────────
-    # 说明里引用的必须是"实际交付并已验证过"的那个包：.tar.gz（89.8 MB），
-    # 其 sha256 为 gz_sha；步骤与 validate_clean.sh 中实测通过的流程一致。
+    # 说明里引用的必须是"实际交付并已验证过"的那个包：.zip（内含镜像 tar），
+    # 其 sha256 为 zip_sha；步骤与 validate_clean.sh 中实测通过的流程一致。
     #
     # 选默认模型时必须挑"有 apiKey"的 provider：没有 key 的 provider 跑起来
     # 会直接 Error: Not Found（bailian 就是这种情况），说明文件不能推荐它。
@@ -171,10 +178,10 @@ def main() -> int:
         "schema_version": 1,
         "agent": {"name": "opencode", "version": VERSION},
         "package": {
-            "name": os.path.basename(dst_gz),
+            "name": os.path.basename(dst_zip),
             "source": "local",
-            "path": f"tools/opencode-cli/dist/{os.path.basename(dst_gz)}",
-            "sha256": gz_sha,
+            "path": f"tools/opencode-cli/dist/{os.path.basename(dst_zip)}",
+            "sha256": zip_sha,
             "keep_remote": False,
         },
         "target": {
@@ -199,7 +206,7 @@ def main() -> int:
             "execute": False,
             "steps": [
                 {"id": "unpack", "desc": "解压安装包得到镜像 tar",
-                 "run": "gunzip -c {remote_dir}/{zip_name} > {remote_dir}/{agent}-image.tar",
+                 "run": "unzip -o {remote_dir}/{zip_name} -d {remote_dir}",
                  "check": "test -s {remote_dir}/{agent}-image.tar",
                  "timeout_s": 300},
                 {"id": "load-image", "desc": "导入容器镜像",
@@ -230,7 +237,7 @@ def main() -> int:
             "post_health": True,
         },
         "skip_checks": ["disk_space"],
-        "notes": "安装包 .tar.gz 约 90 MB（镜像加载后磁盘占用约 363 MB）。"
+        "notes": "安装包 .zip 约 90 MB（内含镜像 tar）（镜像加载后磁盘占用约 363 MB）。"
                  "目标机器无需外网即可导入镜像；但 opencode 调用模型时需要能访问配置里的 baseURL。"
                  f"默认模型 {default_provider}/{default_model}（有 apiKey，实测可返回内容）。"
                  "配置文件含真实 API Key，仅在本地保留、不进仓库。"
@@ -248,7 +255,7 @@ def main() -> int:
         "version": VERSION,
         "files": {
             "install_package_tar": {"name": IMAGE_TAR_NAME, "size": os.path.getsize(dst_tar), "sha256": tar_sha},
-            "install_package_targz": {"name": os.path.basename(dst_gz), "size": os.path.getsize(dst_gz), "sha256": gz_sha},
+            "install_package_zip": {"name": os.path.basename(dst_zip), "size": os.path.getsize(dst_zip), "sha256": zip_sha},
             "config": {"name": "opencode.json", "size": os.path.getsize(cfg_path), "sha256": cfg_sha},
             "install_doc": {"name": "install.json", "size": os.path.getsize(doc_path), "sha256": sha256_file(doc_path)},
         },
@@ -261,4 +268,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
 

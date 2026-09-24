@@ -7,27 +7,45 @@
 
 | # | 文件 | 作用 | 体积 |
 |---|---|---|---|
-| 1 | `dist/opencode-container-1.18.32-linux-amd64.tar.gz` | 安装包：opencode 的容器镜像，`docker load` 即用 | 89.8 MB |
+| 1 | `dist/opencode-container-1.18.32-linux-amd64.zip` | 安装包：**真 zip**（拉链格式），内含镜像 tar，`unzip` 后 `docker load` | 90.3 MB |
 | 2 | `dist/opencode.json` | 配置文件：模型 provider / baseURL / apiKey / 模型名，挂给容器用 | 1.1 KB |
-| 3 | `dist/install.json` | 安装说明：按它逐条执行即可完成安装与校验 | 3.5 KB |
+| 3 | `dist/install.json` | 安装说明：按它逐条执行即可完成安装与校验 | 3.4 KB |
 
+> **为什么是 .zip**：前端二进制槽位的 `accept` 过滤是 `.zip`，且后端的安装包命名也补 `.zip`。
+> zip 里放的是**未压缩的镜像 tar**（zip 用 store 模式）——镜像层本身已是 gzip，
+> 再压缩几乎没有收益（省 0.6 MB），所以不去折腾压缩率。
+> `docker load` 其实直接支持 `.tar.gz`，做成 zip 只是为了配合前端过滤。
+>
 > 文件 1 是**镜像包**而不是能联网拉取的镜像：目标机器不需要外网即可导入。
 > 但 opencode **调用模型时**需要能访问文件 2 里的 `baseURL`。
 
 文件 2、3 含真实 API Key / 机器信息，**只在本地保留、不进仓库**（`.gitignore` 已覆盖 `dist/`）。
 可提交的同构模板是 `opencode.json.template`（key 已替换为占位符）。
 
+## 在前端上传（r1 三个槽位）
+
+| 槽位 | label（`accept`） | 上传文件 |
+|---|---|---|
+| 左 | 智能体二进制文件（`.zip`） | `opencode-container-1.18.32-linux-amd64.zip` |
+| 右 | 智能体配置文件（`.yaml,.yml,.json`） | `opencode.json` |
+| 三 | 安装说明文件（`.json`，可选） | `install.json` |
+
+> 后端对左槽的 zip **不校验、不落盘、不解析**，只记文件名与大小
+> （`profile.binary / binary_size`，`binary_stored: false`），所以 90 MB 也只是记个大小。
+> 装机时"补传包"的 64 MB 上限（`api_install.py` 的 `MAX_PACKAGE_BYTES`）
+> 只作用于 `package.source = "upload"`；本说明用的是 `source = "local"`，不受该上限影响。
+
 ## 使用流程
 
 ```bash
 # 工作机 -> 目标机器
-scp dist/opencode-container-1.18.32-linux-amd64.tar.gz  root@<SERVER_IP>:/tmp/
-scp dist/opencode.json                                  root@<SERVER_IP>:/tmp/
-scp dist/install.json                                   root@<SERVER_IP>:/tmp/
+scp dist/opencode-container-1.18.32-linux-amd64.zip  root@<SERVER_IP>:/tmp/
+scp dist/opencode.json                               root@<SERVER_IP>:/tmp/
+scp dist/install.json                                root@<SERVER_IP>:/tmp/
 
 # 目标机器上，按 install.json 执行（也可用本项目 step3 的「安装执行」）
-gunzip -c /tmp/opencode-container-1.18.32-linux-amd64.tar.gz > /tmp/oc-image.tar
-docker load -i /tmp/oc-image.tar
+unzip -o /tmp/opencode-container-1.18.32-linux-amd64.zip -d /tmp/opencode-install
+docker load -i /tmp/opencode-install/opencode-image.tar
 mkdir -p /etc/opencode
 cp /tmp/opencode.json /etc/opencode/opencode.json && chmod 600 /etc/opencode/opencode.json
 ```
@@ -48,26 +66,28 @@ docker run --rm -v /etc/opencode:/root/.config/opencode opencode:1.18.32 run -m 
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
-| `unpack` | `gunzip -c …tar.gz > opencode-image.tar` | exit=0，check=**OK** |
-| `load-image` | `docker load -i …` | `Loaded image: opencode:1.18.32`，check=**OK** |
+| `unpack` | `unzip -o …zip -d /tmp/opencode-install` | 解出 `opencode-image.tar`，check=**OK** |
+| `load-image` | `docker load -i …opencode-image.tar` | `Loaded image: opencode:1.18.32`，check=**OK** |
 | `install-config` | `cp opencode.json /etc/opencode/ && chmod 600` | exit=0，check=**OK** |
 | `smoke` | 容器内 `--version` | `1.18.32`，check=**OK** |
 | `verify-config` | 容器内 `models` | 读出 12 个模型（含配置里的 4 个） |
 | `run-agent` | 容器内 `run -m simapp/deepseek-flash "只回答两个字：收到"` | **返回「收到」，exit=0** |
 
-### 方式二：干净流程校验（删镜像 -> 从上传文件导入 -> 真实调用）
+### 方式二：干净流程校验（删镜像 -> 从上传的 zip 导入 -> 真实调用）
 
 ```
-sha256 实际 = f0170c4c54c60638c47f3f8e0e0bcfd36fb4fdcd02e9248ee2e6bec6ba22ec4f
-sha256 期望 = f0170c4c54c60638c47f3f8e0e0bcfd36fb4fdcd02e9248ee2e6bec6ba22ec4f
-=> 校验通过 ✓
-docker load exit=0
---- 真实模型调用 ---
+文件1 校验
+  sha256 实际 = 484967a7fa3efa1976fb545adfae628ff562bca31aca4d746d14ef158230e163
+  sha256 期望 = 484967a7fa3efa1976fb545adfae628ff562bca31aca4d746d14ef158230e163
+  => 通过 ✓
+现存 opencode 镜像: 0        （先删干净，确保确实从文件导入）
+步骤 unpack       : extracting opencode-image.tar   check=OK
+步骤 load-image   : Loaded image: opencode:1.18.32  check=OK
+smoke             : 1.18.32
+verify-config     : bailian/GLM5 … simapp/deepseek-flash …
+--- run-agent（真实模型调用） ---
 > build · deepseek-flash
-收到                (exit=0)
-
-> build · deepseek-flash
-2                   (exit=0)
+收到                              (exit=0)
 ```
 
 ---
@@ -95,10 +115,11 @@ python tools/opencode-cli/build_deliverables.py
 ```
 
 它会：
-1. 从 `tools/opencode-bundle/dist/` 取镜像 tar，产出 `.tar.gz` 并**校验解压长度 == 原 tar**
+1. 从 `tools/opencode-bundle/dist/` 取镜像 tar，打成真 zip（内含 `opencode-image.tar`），
+   并**校验 zip 内 tar 读回长度 == 原 tar**
 2. 从本机 `~/.config/opencode/` 读取真实 provider 配置，写出 `dist/opencode.json`；
    同时写出脱敏模板 `opencode.json.template`
-3. 写出 `dist/install.json`（包名/sha256 与第 1 步的实际产物对齐，默认模型选有 key 的）
+3. 写出 `dist/install.json`（包名/sha256 与第 1 步的实际产物对齐，默认模型选有 apiKey 的）
 
 ## 已知限制
 
