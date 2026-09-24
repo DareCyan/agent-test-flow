@@ -49,8 +49,7 @@
 ### 另外两个文件
 
 > **文件 1 为什么是 .zip**：前端二进制槽位的 `accept` 过滤是 `.zip`，且后端的安装包命名也补 `.zip`。
-> zip 里放的是**未压缩的镜像 tar**（zip 用 store 模式）——镜像层本身已是 gzip，
-> 再压缩几乎没有收益（省 0.6 MB），所以不去折腾压缩率。
+> zip 里放的是**未压缩的镜像 tar**（store 模式，`opencode-image.tar`）。
 > `docker load` 其实直接支持 `.tar.gz`，做成 zip 只是为了配合前端过滤。
 >
 > 文件 1 是**镜像包**而不是能联网拉取的镜像：目标机器不需要外网即可导入。
@@ -58,6 +57,28 @@
 
 文件 2、3 含真实 API Key / 机器信息，**只在本地保留、不进仓库**（`.gitignore` 已覆盖 `dist/`）。
 可提交的同构模板是 `opencode.json.template`（key 已替换为占位符）。
+
+### `package.sha256` 到底声明的是哪个对象
+
+后端预检 `zip_sha256` 的实现是（`backend/api_install.py` 第 271-280 行）：
+
+```
+_sha256_file(local_zip) == package.sha256      # local_zip = package.path 指向的文件
+```
+
+也就是**拿包文件本身算哈希**跟声明比。所以 `package.sha256` 声明的是
+**zip 自身的摘要**（`484967a7…`），这样预检才能精确 pass。
+
+镜像内部另有两个摘要，供人工核对（都是不同对象，别混）：
+
+| 对象 | 值 | 说明 |
+|---|---|---|
+| `package.sha256` | `484967a7fa3efa1976fb545adfae628ff562bca31aca4d746d14ef158230e163` | zip 文件本身，**后端预检比对的就是它** |
+| 内层 `opencode-image.tar` | `024cb35a4f446b063a7463aed04841d25b8af0c02c675bb07d0bead1f9638c1b` | 解出来的镜像 tar |
+| 镜像里 opencode 层 | `376f4b4c782e5c4b94eeb95bb73731ac332103d303215ec72939f690bda5291a` | `<digest>.tar.gz` 文件名，== 该层字节的 sha256 |
+
+镜像内的一致性已单独验证通过：层文件名 == `sha256(层字节)`，
+且 `config.rootfs.diff_ids[i]` == `sha256(该层解压后的原始字节)`。
 
 ## 在前端上传（r1 三个槽位）
 

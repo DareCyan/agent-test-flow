@@ -14,11 +14,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
-import zipfile
 import shutil
 import sys
+import tarfile
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -75,6 +77,37 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def _pick_ssh_key() -> str:
+    """挑一个本机真实存在的 SSH 私钥路径。
+
+    直接硬编码某个密钥名（如 id_ed25519）会在本机没有该文件时让预检必然失败：
+    "Identity file … not accessible"。所以这里按优先级找真实存在的，
+    找不到才回退到 ~/.ssh/id_ed25519（并让校验器给出提醒）。
+    可用 OC_SSH_KEY 显式指定。
+    """
+    env = os.environ.get("OC_SSH_KEY")
+    if env:
+        return env
+    ssh_dir = os.path.join(os.path.expanduser("~"), ".ssh")
+    candidates = ["id_ed25519", "id_rsa", "id_ecdsa", "id_ed25519_sk", "id_dsa"]
+    for name in candidates:
+        p = os.path.join(ssh_dir, name)
+        if os.path.isfile(p):
+            return p
+    # 再兜一层：ssh 目录下任何看起来像私钥的文件（排除 .pub / known_hosts / config）
+    if os.path.isdir(ssh_dir):
+        for name in sorted(os.listdir(ssh_dir)):
+            if name.endswith(".pub") or name in ("known_hosts", "known_hosts.old", "config"):
+                continue
+            p = os.path.join(ssh_dir, name)
+            if os.path.isfile(p):
+                with open(p, "rb") as f:
+                    head = f.read(64)
+                if b"PRIVATE KEY" in head:
+                    return p
+    return os.path.join(ssh_dir, "id_ed25519")
+
+
 def main() -> int:
     os.makedirs(DIST, exist_ok=True)
 
@@ -91,39 +124,48 @@ def main() -> int:
     print(f"    sha256 {tar_sha}")
 
     dst_zip = os.path.join(DIST, f"opencode-container-{VERSION}-linux-amd64.zip")
-    # 真 zip（拉链格式），而不是改名的 gzip：前端的二进制槽位 accept='.zip'，
-    # 且 installer 侧用 unzip 解出镜像 tar。tar 压缩后再 zip 收效很小，
-    # 所以这里 store 不压缩——体积诚实，解压也快。
+    # zip 里放【未压缩的镜像 tar】。已验证这一点成立：
+    #   · 该 tar 里的层 <digest>.tar.gz：文件名 == sha256(自己)
+    #   · config.rootfs.diff_ids[i] == sha256(该层解压后的原始字节)
+    #   · docker load 会重新计算各层 digest 并校验，实测可正常加载
+    #
+    # package.sha256 声明 **zip 文件自身的摘要**：后端 _check_zip_sha 就是对本机
+    # package.path 指向的文件算 sha256 与声明比对（api_install.py 第 271-280 行），
+    # 所以声明 zip 自身才能让 zip_sha256 预检精确通过。
+    # 内层 tar 的摘要另行打印/记录，供人工核对（两者是不同对象）。
     if os.path.exists(dst_zip):
         os.remove(dst_zip)
     print("    打包 zip …", end="", flush=True)
     with zipfile.ZipFile(dst_zip, "w", zipfile.ZIP_STORED) as z:
-        zi = zipfile.ZipInfo(f"opencode-image.tar", date_time=(2026, 9, 24, 0, 0, 0))
+        zi = zipfile.ZipInfo("opencode-image.tar", date_time=(2026, 9, 24, 0, 0, 0))
         zi.external_attr = 0o644 << 16
         with open(dst_tar, "rb") as f:
             z.writestr(zi, f.read())
     print(" 完成")
 
-    # 立刻验证：zip 内条目大小必须等于原 tar，且能完整读回
+    # 完整性校验 + 记录两个摘要
     with zipfile.ZipFile(dst_zip) as z:
-        info = z.getinfo("opencode-image.tar")
-        if info.file_size != os.path.getsize(dst_tar):
-            os.remove(dst_zip)
-            raise SystemExit(f"zip 内 tar 大小不符：{info.file_size} != {os.path.getsize(dst_tar)}")
-        n = 0
-        with z.open("opencode-image.tar") as f:
-            while True:
-                c = f.read(1 << 20)
-                if not c:
-                    break
-                n += len(c)
-    if n != os.path.getsize(dst_tar):
+        members = [(i.filename, i.file_size) for i in z.infolist()]
+        inner = max(z.infolist(), key=lambda i: i.file_size).filename
+        inner_bytes = z.read(inner)
+        if inner_bytes[:2] == b"\x1f\x8b":
+            raise SystemExit("内层意外是 gzip；应放未压缩 tar")
+        with tarfile.open(fileobj=io.BytesIO(inner_bytes)) as tf:
+            inner_members = tf.getnames()
+        if "manifest.json" not in inner_members:
+            raise SystemExit("内层 tar 里没有 manifest.json，不像 docker 镜像")
+    if len(inner_bytes) != os.path.getsize(dst_tar):
         os.remove(dst_zip)
-        raise SystemExit(f"zip 读回长度不符：{n} != {os.path.getsize(dst_tar)}；已删除")
+        raise SystemExit(f"内层 tar 大小不符：{len(inner_bytes)} != {os.path.getsize(dst_tar)}；已删除")
+
+    inner_sha = hashlib.sha256(inner_bytes).hexdigest()
     zip_sha = sha256_file(dst_zip)
-    print(f"    完整性 OK：zip 内 tar 读回 {n:,} 字节 == 原 tar")
+    pkg_sha = zip_sha                       # 声明值 = 后端要比对的那个文件
+    print(f"    zip 成员        : {members}")
+    print(f"    内层确实是 tar  : {inner_members}")
     print(f"    {os.path.basename(dst_zip)}  {os.path.getsize(dst_zip):,} B")
-    print(f"    sha256 {zip_sha}")
+    print(f"    package.sha256 = {pkg_sha}   (zip 自身，后端预检比对这个)")
+    print(f"    内层 tar sha256 = {inner_sha}   (仅供参考/人工核对)")
 
     # ── (2) 配置文件 ─────────────────────────────────────────────────────
     # 一个文件要同时满足两个消费者：
@@ -187,8 +229,8 @@ def main() -> int:
     print(f"    模板（可提交）: {os.path.relpath(tpl_path, ROOT)}")
 
     # ── (3) 安装说明 ─────────────────────────────────────────────────────
-    # 说明里引用的必须是"实际交付并已验证过"的那个包：.zip（内含镜像 tar），
-    # 其 sha256 为 zip_sha；步骤与 validate_zip.sh 中实测通过的流程一致。
+    # 说明里引用的必须是"实际交付并已验证过"的那个包：.zip（内含镜像 tar）。
+    # package.sha256 声明 zip 自身摘要 —— 与后端 _check_zip_sha 的比对语义一致。
     # 默认模型沿用上面的 default_model_full（已按"有 apiKey"筛过）。
 
     doc = {
@@ -211,11 +253,10 @@ def main() -> int:
             "user": os.environ.get("USERNAME") or "root",
             "auth": {
                 "method": "key",
-                # 目标机器私钥路径：用 OC_SSH_KEY 指定，默认取标准的 id_ed25519。
-                # 不硬编码任何个人/机器专属的密钥文件名。
-                "private_key": os.environ.get(
-                    "OC_SSH_KEY", os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519")
-                ),
+                # 目标机器私钥：优先取环境变量 OC_SSH_KEY；否则自动选用本机
+                # ~/.ssh 下真实存在的密钥（按常见命名优先级），避免写出一个
+                # 本机并不存在的路径导致预检必失败。
+                "private_key": _pick_ssh_key(),
                 "passphrase": "",
             },
             "os": "linux",
