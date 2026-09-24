@@ -20,7 +20,8 @@
 #        · 不支持嵌套层级写法（那是 JSON 版才有的兼容）
 #        · 文件带 UTF-8 BOM 也没问题（记事本保存的 yaml 会带）
 #
-#  环境变量优先于本文件：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_TIMEOUT_S
+#  环境变量优先于本文件：LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / LLM_TIMEOUT_S / LLM_MAX_TOKENS
+#  并发度另有环境变量：DATASET_EXT_CONCURRENCY（对应本文件的 concurrency）
 # ============================================================================
 
 api: https://api.openai.com/v1      # 也接受 base_url / api_url / endpoint；末尾缺 /v1 会自动补
@@ -30,6 +31,10 @@ model: gpt-4o-mini                  # 也接受 model_name / model_id
 timeout: 300                        # 单次 LLM 调用超时（秒），默认 300
                                     # 推理模型（qwen3.8-max 等）单次 verifier 调用实测要 ~245s，
                                     # 调小了会让该步超时→降级 mock（页面标「部分 mock」）
+max_tokens: 32768                   # 单次回复上限，默认 32768；0 = 不带该字段（交服务端默认）
+                                    # 别调太小：截断的 JSON 解析不出来 → 重试 → 仍会降级 mock
+concurrency: 4                      # generator / verifier 并发度，默认 4
+                                    # 任务数 ≥ 并发度 才有意义
 temperature: 0.7                    # 默认 0.7
 fallback_to_mock: true              # true：某步调用失败时降级 mock 并把整轮跑完；false：整轮判失败
 

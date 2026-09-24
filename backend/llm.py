@@ -25,6 +25,11 @@ CONFIG_PATH = BACKEND_DIR / "config.json"   # 兼容旧引用
 _DEFAULT_TIMEOUT = 300
 # 默认 300s：实测推理模型（如 qwen3.8-max）单次 verifier 调用就要 ~245s（含 3 万+ 字推理），
 # 180s 会让该步超时→降级 mock。慢模型请在 config.yaml 里把 timeout 调大。
+_DEFAULT_MAX_TOKENS = 32768
+# 默认 32768：给推理模型的长 JSON 输出留足余量，只砍掉极端长尾（不设上限时它会一路吐到几万字，
+# 单次调用能拖到十几分钟）。**别调太小**——截断的 JSON 解析不出来 → 重试 → 最后仍降级 mock。
+# 设 0 表示显式关闭，请求体里不带 max_tokens。
+_max_tokens: int | None = None   # 最近一次实际生效值，供 /api/health 观测
 _last_error: str = ""
 
 
@@ -34,6 +39,23 @@ def find_config_file() -> Path | None:
         if p.exists():
             return p
     return None
+
+
+def file_config() -> dict:
+    """读 `backend/config.*` 的原始键值（扁平 YAML 或 JSON）。
+
+    与 load_config 的区别：这里不做 base_url/model 的兜底与归一化，只给
+    「行为参数」（timeout / max_tokens / 并发 / fallback_to_mock）用，
+    这样即使配置文件里不写 api/key/model（仍然用 r1 上传的智能体配置），
+    也能单独把行为参数调大。
+    """
+    path = find_config_file()
+    if path is None:
+        return {}
+    try:
+        return simplecfg.parse_text(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def load_config(override: dict | None = None) -> dict:
@@ -62,6 +84,7 @@ def load_config(override: dict | None = None) -> dict:
                                         "access_key", "openai_api_key"),
         "model": simplecfg.deep_first(raw, "model", "model_name", "model_id"),
         "timeout": simplecfg.deep_first(raw, "timeout", "timeout_s"),
+        "max_tokens": simplecfg.deep_first(raw, "max_tokens", "max_output_tokens", "maxtokens"),
         "temperature": simplecfg.deep_first(raw, "temperature"),
         "fallback_to_mock": simplecfg.deep_bool(raw, "fallback_to_mock", True),
         "config_source": path.name if path else "",
@@ -82,6 +105,12 @@ def load_config(override: dict | None = None) -> dict:
         try:
             llm["timeout"] = int(os.environ["LLM_TIMEOUT_S"])
             overrides.append("LLM_TIMEOUT_S")
+        except ValueError:
+            pass
+    if os.environ.get("LLM_MAX_TOKENS"):
+        try:
+            llm["max_tokens"] = int(os.environ["LLM_MAX_TOKENS"])
+            overrides.append("LLM_MAX_TOKENS")
         except ValueError:
             pass
     if overrides:
@@ -112,6 +141,12 @@ def load_config(override: dict | None = None) -> dict:
     except (TypeError, ValueError):
         llm["timeout"] = _DEFAULT_TIMEOUT
     try:
+        # 0 / 负数 = 显式关闭（请求体里不带 max_tokens），其它值按上限原样下发
+        llm["max_tokens"] = (int(llm["max_tokens"]) if llm.get("max_tokens") not in (None, "")
+                             else _DEFAULT_MAX_TOKENS)
+    except (TypeError, ValueError):
+        llm["max_tokens"] = _DEFAULT_MAX_TOKENS
+    try:
         llm["temperature"] = float(llm["temperature"]) if llm.get("temperature") not in (None, "") else 0.7
     except (TypeError, ValueError):
         llm["temperature"] = 0.7
@@ -123,14 +158,24 @@ def last_error() -> str:
     return _last_error
 
 
+def max_tokens_effective() -> int | None:
+    """最近一次请求实际下发的 max_tokens；None = 未启用（或还没调过 LLM）。"""
+    return _max_tokens
+
+
 def is_configured(cfg: dict | None = None) -> bool:
     cfg = cfg or load_config()
     return bool((cfg.get("llm") or {}).get("configured"))
 
 
-def chat(prompt: str, cfg: dict | None = None, timeout: int | None = None) -> str:
-    """调 OpenAI 兼容 /chat/completions，返回 assistant 文本。失败抛异常。"""
-    global _last_error
+def chat(prompt: str, cfg: dict | None = None, timeout: int | None = None,
+         max_tokens: int | None = None) -> str:
+    """调 OpenAI 兼容 /chat/completions，返回 assistant 文本。失败抛异常。
+
+    `timeout` / `max_tokens` 不传就用配置值（默认 300s / 32768）；
+    `max_tokens=0` 表示这一次显式不带该字段（交由服务端默认）。
+    """
+    global _last_error, _max_tokens
     cfg = cfg or load_config()
     llm = cfg.get("llm") or {}
     base, key, model = llm.get("base_url", ""), llm.get("api_key", ""), llm.get("model", "")
@@ -138,12 +183,22 @@ def chat(prompt: str, cfg: dict | None = None, timeout: int | None = None) -> st
         _last_error = "LLM 未配置（缺 base_url / model）"
         raise RuntimeError(_last_error)
 
+    mt = llm.get("max_tokens") if max_tokens is None else max_tokens
+    try:
+        mt = int(mt) if mt not in (None, "") else _DEFAULT_MAX_TOKENS
+    except (TypeError, ValueError):
+        mt = _DEFAULT_MAX_TOKENS
+    _max_tokens = mt if mt > 0 else None
+
     url = base if base.endswith("/chat/completions") else base + "/chat/completions"
-    body = json.dumps({
+    payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": float(llm.get("temperature", 0.7) or 0.7),
-    }, ensure_ascii=False).encode("utf-8")
+    }
+    if mt > 0:
+        payload["max_tokens"] = mt
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"

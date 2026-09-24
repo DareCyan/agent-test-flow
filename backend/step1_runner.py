@@ -24,6 +24,7 @@ import api_agent
 import llm
 import mockgen
 import scene_matrix as sm
+import simplecfg
 import store
 from prompts import MD_G_AGENT_PROMPT, MD_P_AGENT_PROMPT, MD_V_AGENT_PROMPT
 
@@ -48,9 +49,18 @@ def _clear(run_id: int) -> None:
 
 
 def _concurrency() -> int:
+    """生成/校验的并发度：环境变量 DATASET_EXT_CONCURRENCY > config 的 concurrency > 4。
+
+    只有任务数 ≥ 并发度时加并发才有意义（默认 4 已能打满 4 条任务）；
+    任务更多、或想压测上游限流时，直接调这个值。
+    """
+    raw = (os.environ.get("DATASET_EXT_CONCURRENCY") or "").strip()
+    if not raw:
+        raw = str(simplecfg.deep_first(llm.file_config(), "concurrency",
+                                       "dataset_concurrency", "workers") or "")
     try:
-        return max(1, int(os.environ.get("DATASET_EXT_CONCURRENCY") or 4))
-    except ValueError:
+        return max(1, int(float(raw)))
+    except (TypeError, ValueError):
         return 4
 
 
@@ -181,6 +191,13 @@ def run(run_id: int) -> None:
     if not llm_ok:
         store.log(run_id, "[Step1] 没有可用 LLM：在 r1 上传含 api/key/model 的智能体配置即可被 step1 直接使用"
                           "（也可另建 backend/config.yaml）；否则全程走内置 mock", "muted")
+
+    rt = cfg.get("llm") or {}
+    rt_mt = int(rt.get("max_tokens") or 0)
+    store.log(run_id, f"[Step1] 运行参数: 并发 {_concurrency()} · 单次超时 {rt.get('timeout')}s · "
+                      f"max_tokens {'关闭' if rt_mt <= 0 else rt_mt}"
+                      "（改 backend/config.yaml 的 timeout / max_tokens / concurrency，"
+                      "或环境变量 LLM_TIMEOUT_S / LLM_MAX_TOKENS / DATASET_EXT_CONCURRENCY）", "muted")
 
     degraded = False
 
