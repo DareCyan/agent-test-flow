@@ -32,12 +32,17 @@ start.cmd
 
 浏览器打开 **http://127.0.0.1:8787/** ，然后：
 
-1. 点 **接入智能体**。可以直接用 `examples/` 里的示例文件：
-   - 左侧「智能体二进制文件」：传 `examples/agent/shopping-agent-v2.zip`（只接受 `.zip`，**不校验、不落盘、不解析**）；
-   - 右侧「智能体配置文件」：传 `examples/agent/shopping-agent.yaml`（模板见 `examples/agent/agent-config.template.yaml`）。
+1. 点 **接入智能体**。仓库里 `examples/agent/` **只带模板**（`agent-config.template.yaml` / `.json`），
+   按模板填一份配置自己用即可：
+   - 左侧「智能体二进制文件」：传一个 `.zip`（只接受 `.zip`，**不校验、不落盘、不解析**）；
+   - 右侧「智能体配置文件」：传按模板填好的配置；**里面若声明了 `api / key / model`，
+     step1 会直接用它们去调模型**（见下文「接真实 LLM」）。
    两个槽位都不选也行，会用演示回退文件；
 2. 点 **提交测试任务**（brief 可从 `examples/briefs/` 复制）；
 3. 观察 r1→r6 六个区域随真实 step1 进度联动，顶部步骤条 step1 由「待命」→「运行中」→「完成」。
+
+> 仓库里不含**填好的**示例配置与示例安装包（`examples/agent/shopping-agent.*`、`shopping-agent-v2.zip`）：
+> 它们按约定只留在本地（`.gitignore` 已排除，避免把真实 key 提交上去），不影响上面的流程。
 
 > 必须通过 `http://127.0.0.1:8787/` 打开。若直接双击 `index.html`（`file://`），
 > 浏览器会因跨源拒绝 `/api/*`，页面会**自动回退到原有演示动画**（不会白屏或报错）。
@@ -54,8 +59,8 @@ python backend/server.py --host 0.0.0.0 --port 9000
 
 1. **就用你在 r1 上传的智能体配置文件**（最省事）：那份配置里的 `api / key / model`
    本来只用于接入探测，现在 **step1 也会直接拿它调模型** —— 前端传什么就用什么。
-   即：不需要新建任何文件，在 r1 选择 `examples/agent/shopping-agent.json`（或你自己的配置）→ 提交测试任务，
-   顶部徽标会从 `mock` 变成 `LLM qwen3.8-max`，四个区域的数据来源标记从 `mock 数据` 变成 `LLM 实测`。
+   即：不需要新建任何文件，在 r1 上传按模板填好的配置（含 `api / key / model`）→ 提交测试任务，
+   顶部徽标会从 `mock` 变成 `LLM <你的模型名>`，四个区域的数据来源标记从 `mock 数据` 变成 `LLM 实测`。
 2. **建 `backend/config.yaml`**（想独立于智能体配置时用）：
 
 ```bat
@@ -112,19 +117,19 @@ agent-test-flow/
 │  ├─ css/pipeline-bar.css       步骤条样式（取自原 css/pipeline.css 的 .mp-step-*）
 │  └─ js/api.js                  唯一新增的传输层（fetch + SSE + 探测）
 ├─ tools/
-│  ├─ verify_backend.py          后端验收（73 项断言）
+│  ├─ verify_backend.py          后端验收（91 项断言）
 │  ├─ verify_config.py           LLM 配置读取验收（json / yaml / BOM / 优先级，17 项）
-│  ├─ e2e_frontend.mjs           前端端到端验收（live 63 项 / demo 32 项）
+│  ├─ e2e_frontend.mjs           前端端到端验收（live 75 项 / demo 39 项）
 │  ├─ probe_endpoints.py         外网与本地模型端点可达性诊断
 │  ├─ extract_matrix.py          从 scene-matrix.js 抽矩阵（一次性，可重跑）
 │  └─ extract_inline.py          抽内联脚本供 node --check 语法校验
 ├─ examples/                     示例文件（说明见 examples/README.md）
-│  ├─ agent/agent-config.template.yaml / .json     配置文件模板
-│  ├─ agent/shopping-agent.yaml / .json            填好的示例配置
-│  ├─ agent/shopping-agent-v2.zip                  示例安装包（r1 左槽）
+│  ├─ agent/agent-config.template.yaml / .json     配置文件模板（**仓库里只提交这两个**）
+│  ├─ agent/shopping-agent.yaml / .json            ← 本地成品示例（不进仓库：可能含真实 key）
+│  ├─ agent/shopping-agent-v2.zip                  ← 本地示例安装包（不进仓库）
 │  └─ briefs/01-电商购物.md / 02-本地生活.md / 03-出行服务.md
-├─ data/runs/*.json              step1 运行记录
-└─ uploads/                      上传物（配置文件存文本，zip 只存文件名/大小）
+├─ data/runs/*.json              step1 运行记录（不进仓库）
+└─ uploads/                      上传物（不进仓库；配置文件存文本，zip 只存文件名/大小）
 ```
 
 ---

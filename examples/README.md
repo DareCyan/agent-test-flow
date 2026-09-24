@@ -8,7 +8,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `agent/shopping-agent-v2.zip` | 示例安装包（1.8 KB，内含占位二进制 + manifest + README） |
+| `agent/shopping-agent-v2.zip` | 示例安装包（1.8 KB，内含占位二进制 + manifest + README）· **本地文件，不进仓库** |
 
 上传约定：
 
@@ -23,8 +23,13 @@
 |---|---|
 | `agent/agent-config.template.yaml` | **模板**：三项必填 + 全部可选字段，逐行带注释 |
 | `agent/agent-config.template.json` | 同一模板的 JSON 版 |
-| `agent/shopping-agent.yaml` | 填好的示例（YAML，可直接上传） |
-| `agent/shopping-agent.json` | 填好的示例（JSON） |
+| `agent/shopping-agent.yaml` | 填好的示例（YAML，可直接上传）· **本地文件，不进仓库** |
+| `agent/shopping-agent.json` | 填好的示例（JSON）· **本地文件，不进仓库**（可能含真实 key） |
+
+> **提交约定**：`examples/agent/` 只提交上面两个 `agent-config.template.*`（`.gitignore` 里是
+> `examples/agent/*` + 两个模板的例外规则）。填好的示例配置里往往写着真实 `key`，
+> 所以只在本地留着；想跑真 LLM 就把 `api / key / model` 填进自己上传的配置，或写进
+> `backend/config.yaml`（同样不进仓库）。
 
 必填三项 —— 就是智能体自己的模型接入信息，用于「**模型联通性识别**」实测：
 
@@ -114,7 +119,7 @@ model: gpt-4o-mini
 
 
 1. `start.cmd` 启动，打开 http://127.0.0.1:8787/
-2. r1 左槽传 `agent/shopping-agent-v2.zip`，右槽传 `agent/shopping-agent.yaml`，点「接入智能体」
+2. r1 左槽传一个 `.zip`，右槽传**按模板填好的**配置（本地那份 `agent/shopping-agent.yaml` / `.json` 就是例子），点「接入智能体」
 3. 看 6 行识别日志（第 5 行的联通性结论即来自你上传的配置）
 4. r2 粘贴 `briefs/01-电商购物.md` 的内容，点「提交测试任务」
 5. 观察 r3 树 / r4 矩阵 / r5 指标 / r6 参数明细随真实 step1 进度联动，顶部 step1 由「运行中」变「完成」
