@@ -8,10 +8,47 @@
 | # | 文件 | 作用 | 体积 |
 |---|---|---|---|
 | 1 | `dist/opencode-container-1.18.32-linux-amd64.zip` | 安装包：**真 zip**（拉链格式），内含镜像 tar，`unzip` 后 `docker load` | 90.3 MB |
-| 2 | `dist/opencode.json` | 配置文件：模型 provider / baseURL / apiKey / 模型名，挂给容器用 | 1.1 KB |
+| 2 | `dist/opencode.json` | 配置文件：**一份文件同时服务两个消费者**（见下） | 1.4 KB |
 | 3 | `dist/install.json` | 安装说明：按它逐条执行即可完成安装与校验 | 3.4 KB |
 
-> **为什么是 .zip**：前端二进制槽位的 `accept` 过滤是 `.zip`，且后端的安装包命名也补 `.zip`。
+### 文件 2 为什么是"双层"结构
+
+它要同时被两个东西读，两边的格式要求**互相冲突**：
+
+| 消费者 | 读什么 | 格式要求 |
+|---|---|---|
+| 本项目 r1「智能体配置文件」槽位 | `api` / `key` / `model` | **必须顶层扁平键**（`backend/simplecfg.py` 明确「不支持嵌套层级」） |
+| opencode 容器 | `provider.<name>.{npm,options,models}` | **必须嵌套**，`provider` 是对象 |
+
+所以同一份 JSON 里**顶层放扁平接入层，同时带 provider 层**，各取所需：
+
+```jsonc
+{
+  "api":   "https://api.deepseek.com",   // ← 本项目 r1 读这里
+  "key":   "sk-…",
+  "model": "deepseek-flash",
+  "opencode_provider": "simapp",          // 给人看 opencode 该用哪个
+  "opencode_model":    "simapp/deepseek-flash",
+
+  "provider": {                           // ← opencode 容器读这里
+    "simapp": { "npm": "@ai-sdk/openai-compatible",
+                "options": { "baseURL": "https://api.deepseek.com", "apiKey": "sk-…" },
+                "models": { "deepseek-flash": { "name": "deepseek-flash" } } }
+  }
+}
+```
+
+> 只放 `provider` 那一层（我第一版的做法）会导致 r1 的
+> 「单轮/多轮/联通性/协议」全部显示「未声明 api/model，无法实测」——
+> 因为本项目只认扁平键。
+>
+> 顺带：这份配置还会被 `llm.load_config()` 当作**兜底**，让 r1 的
+> 「AI 解读」拿到 LLM 配置（`backend/config.yaml` 故意没写 api/key/model，
+> 走的就是 `config.yaml + agent-config(前端上传的智能体配置)` 这条链）。
+
+### 另外两个文件
+
+> **文件 1 为什么是 .zip**：前端二进制槽位的 `accept` 过滤是 `.zip`，且后端的安装包命名也补 `.zip`。
 > zip 里放的是**未压缩的镜像 tar**（zip 用 store 模式）——镜像层本身已是 gzip，
 > 再压缩几乎没有收益（省 0.6 MB），所以不去折腾压缩率。
 > `docker load` 其实直接支持 `.tar.gz`，做成 zip 只是为了配合前端过滤。

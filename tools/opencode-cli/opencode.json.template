@@ -1,5 +1,17 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "name": "opencode",
+  "api": "https://api.deepseek.com",
+  "key": "REPLACE_WITH_YOUR_KEY",
+  "model": "deepseek-flash",
+  "protocol": "openai-compatible",
+  "call_modes": [
+    "单轮对话",
+    "多轮对话"
+  ],
+  "missing_capabilities": [
+    "图像识别"
+  ],
   "provider": {
     "bailian": {
       "name": "阿里百炼",
@@ -41,5 +53,7 @@
         "setCacheKey": true
       }
     }
-  }
+  },
+  "opencode_provider": "simapp",
+  "opencode_model": "simapp/deepseek-flash"
 }

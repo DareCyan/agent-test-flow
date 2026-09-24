@@ -1,4 +1,4 @@
-﻿"""
+"""
 生成 opencode 的三个交付文件：
 
   (1) 安装包   dist/opencode-container-1.18.32-linux-amd64.zip          (真 zip，内含镜像 tar)
@@ -126,22 +126,57 @@ def main() -> int:
     print(f"    sha256 {zip_sha}")
 
     # ── (2) 配置文件 ─────────────────────────────────────────────────────
+    # 一个文件要同时满足两个消费者：
+    #   · 本项目 r1 的「智能体配置文件」槽位：simplecfg 只认**顶层扁平键**
+    #     （api / key / model）——见 backend/simplecfg.py「不支持嵌套层级」
+    #   · opencode 容器：认嵌套的 provider.<name>.{npm,options:{baseURL,apiKey},models}
+    # 所以顶层放扁平接入层，同时带 provider 层，两边各取所需。
     providers = load_real_config()
+
+    def has_key(pv: dict) -> bool:
+        return bool((pv.get("options") or {}).get("apiKey"))
+
+    with_key = [n for n, pv in providers.items() if has_key(pv) and (pv.get("models") or {})]
+    if not with_key:
+        raise SystemExit("没有任何带 apiKey 的 provider，无法生成可运行的接入配置")
+    default_provider = with_key[0]
+    default_pv = providers[default_provider]
+    default_opts = default_pv.get("options") or {}
+    default_model = next(iter(default_pv["models"]))          # opencode 侧短名
+    default_model_full = f"{default_provider}/{default_model}"  # provider/model 全名
+
     cfg = {
         "$schema": "https://opencode.ai/config.json",
+        # —— 本项目 r1「智能体配置文件」槽位读这一段（必须是顶层扁平键）——
+        "name": "opencode",
+        "api": default_opts.get("baseURL", ""),
+        "key": default_opts.get("apiKey", ""),
+        "model": default_model,
+        "protocol": "openai-compatible",
+        "call_modes": ["单轮对话", "多轮对话"],
+        "missing_capabilities": ["图像识别"],
+        # —— opencode 容器读这一段（嵌套）——
         "provider": providers,
+        # 便于人看：opencode 的 provider/model 全名（本项目会忽略未知键）
+        "opencode_provider": default_provider,
+        "opencode_model": default_model_full,
     }
+
     cfg_path = os.path.join(DIST, "opencode.json")
     with open(cfg_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.write("\n")
     cfg_sha = sha256_file(cfg_path)
     print(f"\n(2) 配置文件 opencode.json  {os.path.getsize(cfg_path):,} B")
-    print(f"    provider: {', '.join(providers)}")
+    print(f"    顶层接入层(本项目读): api={cfg['api']}")
+    print(f"                          model={cfg['model']}  key=***masked***")
+    print(f"    provider 层(opencode 读):")
     for pname, pval in providers.items():
         base = (pval.get("options") or {}).get("baseURL", "?")
         models = ", ".join((pval.get("models") or {}).keys()) or "-"
-        print(f"      - {pname}: baseURL={base} models=[{models}] key=***masked***")
+        tag = "" if has_key(pval) else "   <- 无 apiKey，不可用"
+        print(f"      - {pname}: {base} models=[{models}]{tag}")
+    print(f"    默认可运行模型: {default_model_full}")
     print(f"    sha256 {cfg_sha}")
 
     # 可提交的模板（密钥占位）
@@ -153,22 +188,8 @@ def main() -> int:
 
     # ── (3) 安装说明 ─────────────────────────────────────────────────────
     # 说明里引用的必须是"实际交付并已验证过"的那个包：.zip（内含镜像 tar），
-    # 其 sha256 为 zip_sha；步骤与 validate_clean.sh 中实测通过的流程一致。
-    #
-    # 选默认模型时必须挑"有 apiKey"的 provider：没有 key 的 provider 跑起来
-    # 会直接 Error: Not Found（bailian 就是这种情况），说明文件不能推荐它。
-    def has_key(pv: dict) -> bool:
-        return bool((pv.get("options") or {}).get("apiKey"))
-
-    with_key = [n for n, pv in providers.items() if has_key(pv) and (pv.get("models") or {})]
-    if not with_key:
-        raise SystemExit("没有任何带 apiKey 的 provider，安装说明无法给出可运行的默认模型")
-    default_provider = with_key[0]
-    default_model = next(iter(providers[default_provider]["models"]))
-    print(f"    默认可运行模型: {default_provider}/{default_model}")
-    for n in providers:
-        if n not in with_key:
-            print(f"    （跳过无 apiKey 的 provider: {n}）")
+    # 其 sha256 为 zip_sha；步骤与 validate_zip.sh 中实测通过的流程一致。
+    # 默认模型沿用上面的 default_model_full（已按"有 apiKey"筛过）。
 
     doc = {
         "_comment": "opencode 容器化安装说明。文件(1)是容器镜像包，文件(2)是 opencode 模型配置；"
